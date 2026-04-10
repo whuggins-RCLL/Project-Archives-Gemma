@@ -1,0 +1,262 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "A project in the Kanban board.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "The title of the project."
+        },
+        "description": {
+          "type": "string",
+          "description": "The description of the project."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Intake / Proposed",
+            "Scoping",
+            "In Progress",
+            "Pilot / Testing",
+            "Review / Approval",
+            "Launched"
+          ],
+          "description": "The current status of the project."
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "High",
+            "Medium",
+            "Low"
+          ],
+          "description": "The priority of the project."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags associated with the project."
+        },
+        "dueDate": {
+          "type": "string",
+          "description": "The due date of the project (YYYY-MM-DD)."
+        },
+        "assignee": {
+          "type": "string",
+          "description": "The person assigned to the project."
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "description": "When the project was created."
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "description": "When the project was last updated."
+        },
+        "code": {
+          "type": "string",
+          "description": "Project code."
+        },
+        "owner": {
+          "type": "object",
+          "description": "Project owner metadata."
+        },
+        "progress": {
+          "type": "number",
+          "description": "Completion percent 0-100."
+        },
+        "department": {
+          "type": "string",
+          "description": "Owning department."
+        },
+        "preservationScore": {
+          "type": "number",
+          "description": "Preservation score."
+        },
+        "riskFactor": {
+          "type": "string",
+          "description": "Risk indicator."
+        },
+        "aiDrafts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "AI-generated drafts with confidence and human approval states."
+        }
+      },
+      "required": [
+        "owner",
+        "department",
+        "preservationScore",
+        "progress",
+        "riskFactor",
+        "title",
+        "priority",
+        "code",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "User": {
+      "title": "User",
+      "description": "A user of the application.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "The user's email address."
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "admin",
+            "user"
+          ],
+          "description": "The user's role."
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "description": "When the user was created."
+        }
+      },
+      "required": [
+        "email",
+        "role",
+        "createdAt"
+      ]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "Global application settings.",
+      "type": "object",
+      "properties": {
+        "aiEnabled": {
+          "type": "boolean",
+          "description": "Whether AI features are enabled."
+        },
+        "activeProvider": {
+          "type": "string",
+          "enum": [
+            "gemini",
+            "openai",
+            "anthropic",
+            "gemma"
+          ],
+          "description": "The active AI provider."
+        },
+        "aiNextBestActionEnabled": {
+          "type": "boolean",
+          "description": "Enable next-best action draft generation."
+        },
+        "aiRiskNarrativeEnabled": {
+          "type": "boolean",
+          "description": "Enable risk narrative draft generation."
+        },
+        "aiDuplicateDetectionEnabled": {
+          "type": "boolean",
+          "description": "Enable duplicate project detection drafts."
+        },
+        "aiRequireHumanApproval": {
+          "type": "boolean",
+          "description": "Require explicit human approval for AI drafts."
+        }
+      },
+      "required": [
+        "aiEnabled",
+        "activeProvider"
+      ]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Internal collaboration comment with mentions, reactions, threading, and attachments.",
+      "type": "object",
+      "properties": {
+        "projectId": {
+          "type": "string"
+        },
+        "authorId": {
+          "type": "string"
+        },
+        "author": {
+          "type": "object"
+        },
+        "text": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "mentions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reactions": {
+          "type": "object"
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "editedAt": {
+          "type": "string"
+        },
+        "editHistory": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "createdAt": {
+          "type": "timestamp"
+        }
+      },
+      "required": [
+        "projectId",
+        "authorId",
+        "author",
+        "text",
+        "timestamp",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/Settings"
+      },
+      "description": "Global settings. Typically just one document: 'global'."
+    },
+    "/projects/{projectId}": {
+      "schema": {
+        "$ref": "#/entities/Project"
+      },
+      "description": "The collection of all projects."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/User"
+      },
+      "description": "The collection of users."
+    },
+    "/comments/{commentId}": {
+      "schema": {
+        "$ref": "#/entities/Comment"
+      },
+      "description": "Internal collaboration comments for a project."
+    }
+  }
+}

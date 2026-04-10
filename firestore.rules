@@ -1,0 +1,245 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: projects
+    // Publicly readable dashboard-safe metadata only.
+    //
+    // Collection: users
+    // User profile + role metadata managed by admins.
+    //
+    // Collection: settings
+    // Global AI settings (admin write).
+    //
+    // Collection: comments
+    // Internal project collaboration comments.
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.admin == true;
+    }
+
+    function hasGroup(groupName) {
+      return isAuthenticated() &&
+             request.auth.token.groups is list &&
+             request.auth.token.groups.hasAny([groupName]);
+    }
+
+    function hasAnyGroup(groupNames) {
+      return isAuthenticated() &&
+             request.auth.token.groups is list &&
+             request.auth.token.groups.hasAny(groupNames);
+    }
+
+    function hasAllowedDomainClaim() {
+      return isAuthenticated() &&
+             (
+               request.auth.token.domain_authorized == true ||
+               request.auth.token.org_member == true
+             );
+    }
+
+    function isInternalUser() {
+      // Rule-level enforcement for internal access:
+      // - admins are always internal
+      // - domain authorization must come from trusted custom claims
+      // - group-based access can be granted through token.groups
+      return isAdmin() ||
+             hasAllowedDomainClaim() ||
+             hasAnyGroup(['internal', 'staff', 'team', 'employee']);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) || isValidString(request.resource.data[field], minLen, maxLen);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidProject(data) {
+      // NOTE: Keep this allow-list tight. Public reads depend on this schema
+      // not including sensitive fields.
+      let allowedFields = [
+        'title', 'description', 'status', 'priority', 'tags', 'dueDate',
+        'assignee', 'createdAt', 'updatedAt', 'code', 'owner', 'progress',
+        'department', 'preservationScore', 'riskFactor', 'aiDrafts'
+      ];
+
+      return hasRequiredFields([
+               'title', 'status', 'priority', 'createdAt', 'updatedAt',
+               'code', 'owner', 'progress', 'department', 'preservationScore', 'riskFactor'
+             ]) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             isValidString(data.title, 1, 100) &&
+             isValidOptionalString('description', 0, 5000) &&
+             data.status in ['Intake / Proposed', 'Scoping', 'In Progress', 'Pilot / Testing', 'Review / Approval', 'Launched'] &&
+             data.priority in ['High', 'Medium', 'Low'] &&
+             (!('tags' in data) || (data.tags is list && data.tags.size() <= 20)) &&
+             isValidOptionalString('dueDate', 0, 20) &&
+             isValidOptionalString('assignee', 0, 100) &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp &&
+             isValidString(data.code, 1, 50) &&
+             data.owner is map &&
+             data.owner.keys().hasAll(['name', 'initials']) &&
+             data.progress is number && data.progress >= 0 && data.progress <= 100 &&
+             isValidString(data.department, 1, 100) &&
+             data.preservationScore is number &&
+             isValidString(data.riskFactor, 1, 50) &&
+             (!('aiDrafts' in data) || (canPersistAIDrafts() && data.aiDrafts is list && data.aiDrafts.size() <= 30));
+    }
+
+    function isValidUser(data) {
+      let allowedFields = ['email', 'role', 'createdAt'];
+      return hasRequiredFields(allowedFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'user'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidSettings(data) {
+      let allowedFields = ['aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode'];
+      return hasRequiredFields(allowedFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             data.aiEnabled is bool &&
+             data.activeProvider in ['gemini', 'openai', 'anthropic', 'gemma'] &&
+             (!('aiNextBestActionEnabled' in data) || data.aiNextBestActionEnabled is bool) &&
+             (!('aiRiskNarrativeEnabled' in data) || data.aiRiskNarrativeEnabled is bool) &&
+             (!('aiDuplicateDetectionEnabled' in data) || data.aiDuplicateDetectionEnabled is bool) &&
+             (!('aiRequireHumanApproval' in data) || data.aiRequireHumanApproval is bool) &&
+             data.privacyMode in ['public-read', 'private-read'];
+    }
+
+    function currentPrivacyMode() {
+      return get(/databases/$(database)/documents/settings/global).data.privacyMode;
+    }
+
+    function canPersistAIDrafts() {
+      return exists(/databases/$(database)/documents/settings/global) &&
+             currentPrivacyMode() == 'private-read';
+    }
+
+    function canReadProjects() {
+      // Defaults to public-read if setting is missing.
+      return !exists(/databases/$(database)/documents/settings/global) ||
+             currentPrivacyMode() == 'public-read' ||
+             isAuthenticated();
+    }
+
+    function isValidComment(data) {
+      let allowedFields = [
+        'projectId', 'authorId', 'author', 'text', 'timestamp', 'createdAt',
+        'parentId', 'mentions', 'reactions', 'attachments', 'editedAt', 'editHistory'
+      ];
+      return hasRequiredFields(['projectId', 'authorId', 'author', 'text', 'timestamp', 'createdAt']) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             isValidString(data.projectId, 1, 200) &&
+             isValidString(data.authorId, 1, 200) &&
+             data.author is map &&
+             data.author.keys().hasAll(['name', 'initials']) &&
+             isValidString(data.author.name, 1, 100) &&
+             isValidString(data.author.initials, 1, 5) &&
+             isValidString(data.text, 1, 5000) &&
+             isValidString(data.timestamp, 1, 100) &&
+             (!('parentId' in data) || isValidString(data.parentId, 1, 200)) &&
+             (!('mentions' in data) || (data.mentions is list && data.mentions.size() <= 20)) &&
+             (!('reactions' in data) || data.reactions is map) &&
+             (!('attachments' in data) || (data.attachments is list && data.attachments.size() <= 5)) &&
+             (!('editedAt' in data) || isValidString(data.editedAt, 1, 100)) &&
+             (!('editHistory' in data) || (data.editHistory is list && data.editHistory.size() <= 20)) &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /settings/{settingId} {
+      allow read: if isInternalUser();
+      allow write: if isAdmin() && isValidSettings(request.resource.data);
+    }
+
+    match /projects/{projectId} {
+      // Read access can be toggled by settings/global.privacyMode.
+      allow read: if canReadProjects() && (!isAuthenticated() || isInternalUser());
+
+      allow create: if isInternalUser() && isAdmin() && isValidProject(request.resource.data);
+      allow update: if isInternalUser() && isAdmin() && isValidProject(request.resource.data) && areImmutableFieldsUnchanged(['createdAt']);
+      allow delete: if isInternalUser() && isAdmin();
+    }
+
+    match /comments/{commentId} {
+      // Comments are internal collaboration data.
+      allow read: if isInternalUser();
+      allow create: if isInternalUser() &&
+                    isValidComment(request.resource.data) &&
+                    request.resource.data.authorId == request.auth.uid;
+      allow update: if isInternalUser() &&
+                    isValidComment(request.resource.data) &&
+                    areImmutableFieldsUnchanged(['projectId', 'authorId', 'createdAt', 'timestamp']) &&
+                    (isAdmin() || resource.data.authorId == request.auth.uid);
+      allow delete: if isInternalUser() &&
+                    (isAdmin() || resource.data.authorId == request.auth.uid);
+    }
+
+    match /users/{userId} {
+      allow read: if isInternalUser() && (isOwner(userId) || isAdmin());
+
+      // User can create their own base profile as role=user only.
+      allow create: if isInternalUser() &&
+                    isOwner(userId) &&
+                    isValidUser(request.resource.data) &&
+                    request.resource.data.role == 'user';
+
+      // User may update their own profile but cannot elevate role or alter createdAt.
+      allow update: if isInternalUser() &&
+                    isOwner(userId) &&
+                    isValidUser(request.resource.data) &&
+                    areImmutableFieldsUnchanged(['role', 'createdAt']);
+
+      // Admin override for lifecycle management.
+      allow create: if isInternalUser() && isAdmin() && isValidUser(request.resource.data);
+      allow update: if isInternalUser() && isAdmin() && isValidUser(request.resource.data);
+      allow delete: if isInternalUser() && isAdmin();
+    }
+  }
+}
