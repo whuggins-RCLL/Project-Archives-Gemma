@@ -12,7 +12,7 @@ function badgeClass(role: AppRole): string {
   return 'bg-slate-100 text-slate-700';
 }
 
-export default function AdminUsersView({ canManageRoles }: { canManageRoles: boolean }) {
+export default function AdminUsersView({ canManageRoles, onRoleRefreshRequested }: { canManageRoles: boolean; onRoleRefreshRequested?: () => Promise<void> }) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [audit, setAudit] = useState<AdminAuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,6 +20,7 @@ export default function AdminUsersView({ canManageRoles }: { canManageRoles: boo
   const [filter, setFilter] = useState<AppRole | 'all'>('all');
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshingClaims, setRefreshingClaims] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -52,7 +53,7 @@ export default function AdminUsersView({ canManageRoles }: { canManageRoles: boo
     if (!window.confirm(`Confirm role change to ${role}?`)) return;
     try {
       const message = await api.setUserRole(uid, role);
-      setToast(message);
+      setToast(`${message} Users can click "Refresh my access" to pull new claims immediately.`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Role update failed');
@@ -70,6 +71,22 @@ export default function AdminUsersView({ canManageRoles }: { canManageRoles: boo
     }
   };
 
+  const refreshMyAccess = async () => {
+    setRefreshingClaims(true);
+    try {
+      await api.refreshCurrentUserClaims(true);
+      if (onRoleRefreshRequested) {
+        await onRoleRefreshRequested();
+      }
+      setToast('Your access claims were refreshed.');
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to refresh access claims');
+    } finally {
+      setRefreshingClaims(false);
+    }
+  };
+
   if (!canManageRoles) {
     return <div className="p-10 text-center"><Shield className="mx-auto w-14 h-14 text-error" /><h2 className="text-2xl font-bold mt-2">Access Denied</h2><p className="text-on-surface-variant">Only owners can manage roles.</p></div>;
   }
@@ -79,7 +96,12 @@ export default function AdminUsersView({ canManageRoles }: { canManageRoles: boo
       {toast && <div className="fixed top-6 right-6 z-40 rounded-lg bg-tertiary-container px-4 py-2 text-sm font-bold">{toast}</div>}
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-3xl font-extrabold">Access Management</h1>
-        <button className="px-4 py-2 rounded-lg border" onClick={() => void load()}>Refresh</button>
+        <div className="flex items-center gap-2">
+          <button className="px-4 py-2 rounded-lg border" onClick={() => void load()}>Refresh</button>
+          <button className="px-4 py-2 rounded-lg border" disabled={refreshingClaims} onClick={() => void refreshMyAccess()}>
+            {refreshingClaims ? 'Refreshing claims...' : 'Refresh my access'}
+          </button>
+        </div>
       </div>
       <div className="bg-white rounded-xl border p-4 flex gap-3 items-center">
         <Search className="w-4 h-4 text-slate-500" />

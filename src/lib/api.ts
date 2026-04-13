@@ -71,6 +71,11 @@ export interface AddCommentOptions {
 }
 
 export const api = {
+  refreshCurrentUserClaims: async (forceRefresh = true): Promise<void> => {
+    if (!auth.currentUser) throw new Error('You must be logged in to refresh claims.');
+    await auth.currentUser.getIdToken(forceRefresh);
+  },
+
   getSettings: async (): Promise<Settings> => {
     try {
       const docRef = doc(db, 'settings', 'global');
@@ -432,5 +437,39 @@ export const api = {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Failed to ${action} user`);
     return payload.message || `User ${action}d`;
+  },
+
+  getOwnerBootstrapStatus: async (): Promise<{ ownerCount: number; configured: boolean; eligible: boolean }> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw new Error('You must be logged in to view owner bootstrap status.');
+    const idToken = await currentUser.getIdToken();
+    const response = await fetch('/api/admin/bootstrap/status', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Failed to get owner bootstrap status');
+    return {
+      ownerCount: typeof payload.ownerCount === 'number' ? payload.ownerCount : 0,
+      configured: payload.configured === true,
+      eligible: payload.eligible === true,
+    };
+  },
+
+  claimInitialOwnerAccess: async (): Promise<{ message: string }> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw new Error('You must be logged in to claim owner access.');
+    const idToken = await currentUser.getIdToken();
+    const response = await fetch('/api/admin/bootstrap/claim', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Failed to claim owner access');
+    return { message: payload.message || 'Owner access granted.' };
   }
 };

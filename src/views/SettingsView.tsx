@@ -3,7 +3,7 @@ import { Settings as SettingsIcon, Save, Bot, Key, Shield } from 'lucide-react';
 import { api, Settings } from '../lib/api';
 import { AI_PROVIDER_OPTIONS } from '../lib/uiDefaults';
 
-export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolean, loadingRole: boolean }) {
+export default function SettingsView({ canManageSettings, canViewSettings, loadingRole }: { canManageSettings: boolean, canViewSettings: boolean, loadingRole: boolean }) {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [settings, setSettings] = useState<Settings>({
     aiEnabled: false,
@@ -16,6 +16,10 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [bootstrapStatus, setBootstrapStatus] = useState<{ ownerCount: number; configured: boolean; eligible: boolean } | null>(null);
+  const [claimingOwner, setClaimingOwner] = useState(false);
+
+  const readOnly = !canManageSettings;
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -32,8 +36,26 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
     fetchSettings();
   }, []);
 
+  useEffect(() => {
+    const fetchBootstrapStatus = async () => {
+      try {
+        const status = await api.getOwnerBootstrapStatus();
+        setBootstrapStatus(status);
+      } catch {
+        setBootstrapStatus(null);
+      }
+    };
+
+    void fetchBootstrapStatus();
+  }, []);
+
   const handleSave = async () => {
     setSaving(true);
+    if (readOnly) {
+      setToast({ type: 'error', message: 'You have view-only access to settings.' });
+      setSaving(false);
+      return;
+    }
     try {
       await api.updateSettings(settings);
       setToast({ type: 'success', message: 'Settings saved successfully.' });
@@ -53,15 +75,30 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
 
   if (loading || loadingRole) return <div className="p-10">Loading settings...</div>;
 
-  if (!isAdmin) {
+  if (!canViewSettings) {
     return (
       <div className="p-10 max-w-3xl mx-auto text-center">
         <Shield className="w-16 h-16 text-error mx-auto mb-4" />
         <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
-        <p className="text-on-surface-variant">You do not have administrator privileges to view or modify settings.</p>
+        <p className="text-on-surface-variant">You do not have permissions to view archive settings.</p>
       </div>
     );
   }
+
+  const claimOwnerAccess = async () => {
+    setClaimingOwner(true);
+    try {
+      const result = await api.claimInitialOwnerAccess();
+      setToast({ type: 'success', message: `${result.message} Refreshing claims...` });
+      await api.refreshCurrentUserClaims(true);
+      setBootstrapStatus((prev) => ({ ownerCount: Math.max(prev?.ownerCount ?? 0, 1), configured: prev?.configured ?? true, eligible: false }));
+      window.location.reload();
+    } catch (error) {
+      setToast({ type: 'error', message: error instanceof Error ? error.message : 'Unable to claim owner access.' });
+    } finally {
+      setClaimingOwner(false);
+    }
+  };
 
   return (
     <div className="p-10 max-w-3xl mx-auto">
@@ -80,6 +117,28 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
         <SettingsIcon className="w-8 h-8 text-primary" />
         <h1 className="font-headline text-3xl font-extrabold text-on-surface tracking-tight">Global Settings</h1>
       </div>
+
+      {readOnly && (
+        <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-on-surface-variant">
+          You have read-only settings access. Owners and admins can edit and save changes.
+        </div>
+      )}
+
+      {bootstrapStatus?.configured && bootstrapStatus.ownerCount === 0 && (
+        <div className="mb-6 rounded-lg border border-tertiary-fixed/30 bg-tertiary-container/30 p-4 text-sm text-on-surface-variant space-y-3">
+          <p className="font-bold text-on-surface">First owner setup</p>
+          <p>
+            No owner accounts are configured yet. If your email is listed in <code>OWNER_EMAILS</code>, you can claim owner access here.
+          </p>
+          <button
+            onClick={claimOwnerAccess}
+            disabled={!bootstrapStatus.eligible || claimingOwner}
+            className="px-4 py-2 rounded-lg bg-primary text-white font-bold disabled:opacity-50"
+          >
+            {claimingOwner ? 'Claiming owner access...' : 'Claim owner access'}
+          </button>
+        </div>
+      )}
 
       <div className="bg-surface-container-lowest rounded-xl shadow-sm border border-outline-variant/20 overflow-hidden">
         <div className="p-6 border-b border-outline-variant/10 bg-surface-container-low/30">
@@ -108,12 +167,12 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
               ].map((mode) => (
                 <div
                   key={mode.id}
-                  onClick={() => setSettings({ ...settings, privacyMode: mode.id as Settings['privacyMode'] })}
-                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                  onClick={() => !readOnly && setSettings({ ...settings, privacyMode: mode.id as Settings['privacyMode'] })}
+                  className={`p-4 rounded-lg border-2 transition-all ${
                     settings.privacyMode === mode.id
                       ? 'border-primary bg-primary/5'
                       : 'border-outline-variant/20 hover:border-primary/30'
-                  }`}
+                  } ${readOnly ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'}`}
                 >
                   <div className="font-bold text-sm">{mode.name}</div>
                   <div className="text-xs text-on-surface-variant mt-1">{mode.desc}</div>
@@ -136,6 +195,7 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
                 type="checkbox"
                 className="sr-only peer"
                 checked={settings.aiEnabled}
+                disabled={readOnly}
                 onChange={(e) => setSettings({ ...settings, aiEnabled: e.target.checked })}
               />
               <div className="w-11 h-6 bg-surface-container-high peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
@@ -143,18 +203,18 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
           </div>
 
           {/* Provider Selection */}
-          <div className={`transition-opacity ${settings.aiEnabled ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
+          <div className={`transition-opacity ${settings.aiEnabled ? 'opacity-100' : 'opacity-50 pointer-events-none'} ${readOnly ? 'pointer-events-none' : ''}`}>
             <h3 className="font-bold text-on-surface mb-3">Active AI Provider</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {AI_PROVIDER_OPTIONS.map(provider => (
                 <div
                   key={provider.id}
-                  onClick={() => setSettings({ ...settings, activeProvider: provider.id })}
-                  className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                  onClick={() => !readOnly && setSettings({ ...settings, activeProvider: provider.id })}
+                  className={`p-4 rounded-lg border-2 transition-all ${
                     settings.activeProvider === provider.id
                       ? 'border-primary bg-primary/5'
                       : 'border-outline-variant/20 hover:border-primary/30'
-                  }`}
+                  } ${readOnly ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'}`}
                 >
                   <div className="font-bold text-sm">{provider.name}</div>
                   <div className="text-xs text-on-surface-variant mt-1">{provider.desc}</div>
@@ -165,7 +225,7 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
 
 
 
-          <div className={`transition-opacity space-y-4 ${settings.aiEnabled ? 'opacity-100' : 'opacity-50 pointer-events-none'}`}>
+          <div className={`transition-opacity space-y-4 ${settings.aiEnabled ? 'opacity-100' : 'opacity-50 pointer-events-none'} ${readOnly ? 'pointer-events-none' : ''}`}>
             <h3 className="font-bold text-on-surface">Workflow Capabilities</h3>
             {[
               { key: 'aiNextBestActionEnabled', title: 'Next-best action suggestions', desc: 'Generate prioritized recommendations for project owners.' },
@@ -183,6 +243,7 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
                     type="checkbox"
                     className="sr-only peer"
                     checked={settings[feature.key as keyof Settings] as boolean}
+                    disabled={readOnly}
                     onChange={(e) => setSettings({ ...settings, [feature.key]: e.target.checked })}
                   />
                   <div className="w-11 h-6 bg-surface-container-high peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
@@ -204,11 +265,11 @@ export default function SettingsView({ isAdmin, loadingRole }: { isAdmin: boolea
         <div className="p-6 bg-surface-container-low border-t border-outline-variant/10 flex justify-end">
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || readOnly}
             className="flex items-center gap-2 px-6 py-2.5 bg-primary text-white font-bold rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-70"
           >
             <Save className="w-4 h-4" />
-            {saving ? 'Saving...' : 'Save Settings'}
+            {saving ? 'Saving...' : readOnly ? 'View Only' : 'Save Settings'}
           </button>
         </div>
       </div>

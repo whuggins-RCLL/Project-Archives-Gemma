@@ -40,6 +40,10 @@ export function canManageSettings(role: AppRole): boolean {
   return role === 'owner' || role === 'admin';
 }
 
+export function canViewSettings(role: AppRole): boolean {
+  return role === 'owner' || role === 'admin' || role === 'collaborator' || role === 'viewer';
+}
+
 export function canEditContent(role: AppRole): boolean {
   return role === 'owner' || role === 'admin' || role === 'collaborator';
 }

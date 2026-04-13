@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onIdTokenChanged } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import {
   AppRole,
   canEditContent,
   canManageRoles,
   canManageSettings,
+  canViewSettings,
   canViewInternalStats,
   isAdminRole,
   isOwnerRole,
@@ -17,23 +18,28 @@ export function useUserRole() {
   const [role, setRole] = useState<AppRole>('viewer');
   const [loadingRole, setLoadingRole] = useState(true);
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        setRole('viewer');
-        setLoadingRole(false);
-        return;
-      }
+  const resolveRole = async (forceRefresh = false) => {
+    const user = auth.currentUser;
+    if (!user) {
+      setRole('viewer');
+      setLoadingRole(false);
+      return;
+    }
 
-      try {
-        const tokenResult = await user.getIdTokenResult();
-        setRole(normalizeRoleFromClaims(tokenResult?.claims ?? {}));
-      } catch {
-        console.error('Failed to resolve user role');
-        setRole('viewer');
-      } finally {
-        setLoadingRole(false);
-      }
+    try {
+      const tokenResult = await user.getIdTokenResult(forceRefresh);
+      setRole(normalizeRoleFromClaims(tokenResult?.claims ?? {}));
+    } catch {
+      console.error('Failed to resolve user role');
+      setRole('viewer');
+    } finally {
+      setLoadingRole(false);
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribe = onIdTokenChanged(auth, () => {
+      void resolveRole(false);
     });
 
     return () => unsubscribe();
@@ -47,9 +53,11 @@ export function useUserRole() {
     isViewer: role === 'viewer',
     canManageRoles: canManageRoles(role),
     canManageSettings: canManageSettings(role),
+    canViewSettings: canViewSettings(role),
     canEditContent: canEditContent(role),
     canViewInternalStats: canViewInternalStats(role),
     loadingRole,
     roleLabel: roleLabel(role),
+    refreshRoleClaims: () => resolveRole(true),
   };
 }

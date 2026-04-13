@@ -7,10 +7,12 @@ import { APP_CONFIG } from '../config';
 export default function Topbar({
   roleLabel,
   onOpenSettings,
+  canViewSettings,
   canManageSettings,
 }: {
   roleLabel: string,
   onOpenSettings: () => void,
+  canViewSettings: boolean,
   canManageSettings: boolean,
 }) {
   const navigate = useNavigate();
@@ -65,10 +67,15 @@ export default function Topbar({
           </button>
           <button
             aria-label="Open settings"
-            title={canManageSettings ? 'Settings' : 'Settings (view-only access)'}
+            title={
+              canViewSettings
+                ? (canManageSettings ? 'Settings' : 'Settings (view-only access)')
+                : 'Settings unavailable'
+            }
             onClick={onOpenSettings}
+            disabled={!canViewSettings}
             className={`p-2 rounded-full transition-colors ${
-              canManageSettings
+              canViewSettings
                 ? 'text-slate-700 hover:bg-slate-100'
                 : 'text-slate-400 hover:bg-slate-100'
             }`}
