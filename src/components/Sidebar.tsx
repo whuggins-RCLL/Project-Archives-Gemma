@@ -7,6 +7,7 @@ export default function Sidebar({
   setCurrentView,
   onNewProject,
   canEditContent,
+  canViewSettings,
   canManageSettings,
   canManageRoles,
   isMobileOpen,
@@ -16,6 +17,7 @@ export default function Sidebar({
   setCurrentView: (v: string) => void,
   onNewProject: () => void,
   canEditContent: boolean,
+  canViewSettings: boolean,
   canManageSettings: boolean,
   canManageRoles: boolean,
   isMobileOpen: boolean,
@@ -99,16 +101,17 @@ export default function Sidebar({
           <HelpCircle className="w-4 h-4" />
           <span>Help</span>
         </button>
-        {canManageSettings && (
+        {canViewSettings && (
           <button 
             onClick={() => {
               setCurrentView('settings');
               onMobileClose();
             }}
             className="w-full flex items-center space-x-3 px-4 py-2 text-slate-600 hover:text-brand-dark text-xs font-medium"
+            title={canManageSettings ? 'Manage archive settings' : 'View archive settings (read-only)'}
           >
             <Settings2 className="w-4 h-4" />
-            <span>Archive Settings</span>
+            <span>{canManageSettings ? 'Archive Settings' : 'Archive Settings (View)'}</span>
           </button>
         )}
         {canManageRoles && (

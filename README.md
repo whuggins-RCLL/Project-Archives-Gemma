@@ -308,14 +308,18 @@ Backward compatibility: users that still only have `admin: true` and no `role` c
 
 ### Bootstrap the first owner
 
-Use either approach:
+Use the in-app flow first, with script fallback only for break-glass scenarios:
 
-1. **Automatic bootstrap via env var**
+1. **In-app self-service bootstrap (recommended)**
    - Set `OWNER_EMAILS=user1@example.com,user2@example.com`.
    - Set `FIREBASE_SERVICE_ACCOUNT_JSON` (service-account JSON string).
-   - On server start, matching users are granted owner claims.
+   - When there are zero owners, a signed-in matching user can open **Archive Settings** and click **Claim owner access**.
+   - This writes the same custom claims (`role: owner`, `admin: true`) and audit trail as other role changes.
 
-2. **One-time script**
+2. **Automatic bootstrap on server start**
+   - On server start, matching users that already exist in Firebase Auth are granted owner claims.
+
+3. **One-time script (fallback)**
    - Run: `node scripts/grant-owner-by-email.mjs user@example.com`
    - Requires `FIREBASE_SERVICE_ACCOUNT_JSON` and `FIREBASE_PROJECT_ID` (or `VITE_FIREBASE_PROJECT_ID`).
 
@@ -335,8 +339,15 @@ The backend blocks non-owner role mutations and prevents demoting/removing the l
 1. Log in as owner.
 2. Open Access Management and change a target user role.
 3. Verify success toast and audit log entry.
-4. Sign out/sign in (or refresh ID token) as the target user to observe updated permissions.
+4. As the target user, use **Refresh my access** (Access Management) or sign out/sign in to observe updated permissions.
 
 ### Token refresh behavior
 
-Firebase custom claims are embedded in ID tokens. After role updates, users should sign out/sign in (or force token refresh) before new permissions apply.
+Firebase custom claims are embedded in ID tokens. After role updates, users should force a claim refresh (via **Refresh my access**) or sign out/sign in before new permissions apply.
+
+### Settings permissions
+
+- `canViewSettings` is separate from `canManageSettings`.
+- Owner/admin can view + save settings.
+- Collaborator/viewer can open settings in read-only mode.
+- All writes remain server-authorized by existing owner/admin checks.

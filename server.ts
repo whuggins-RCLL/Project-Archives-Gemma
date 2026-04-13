@@ -769,11 +769,59 @@ async function writeAuditLog(entry: {
   await firestoreCall("adminAudit", { method: "POST", body: { fields } });
 }
 
-async function bootstrapOwnersFromEnv(): Promise<void> {
-  const ownerEmails = (process.env.OWNER_EMAILS || "")
+function configuredOwnerEmails(): string[] {
+  return (process.env.OWNER_EMAILS || "")
     .split(",")
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function isEmailEligibleForOwnerBootstrap(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return false;
+  return configuredOwnerEmails().includes(normalized);
+}
+
+async function applyOwnerRoleToUid(input: { uid: string; email: string; displayName: string; actorUid?: string; actorEmail?: string; action: string }): Promise<void> {
+  const lookup = await identityToolkitCall("/accounts:lookup", { localId: [input.uid] });
+  const authUser = ((lookup.users as Array<Record<string, unknown>> | undefined) || [])[0];
+  if (!authUser) {
+    throw new Error("Target user not found for owner bootstrap");
+  }
+  const oldClaimsRaw = typeof authUser.customAttributes === "string" ? JSON.parse(authUser.customAttributes) as Record<string, unknown> : {};
+  const oldRole = normalizeRoleFromClaims(oldClaimsRaw);
+  const nextClaims: Record<string, unknown> = { ...oldClaimsRaw, role: "owner", admin: true };
+
+  await identityToolkitCall("/accounts:update", { localId: input.uid, customAttributes: JSON.stringify(nextClaims) });
+  await firestoreCall(`users/${input.uid}`, {
+    method: "PATCH",
+    body: {
+      fields: toFirestoreUserFields({
+        email: input.email,
+        displayName: input.displayName || String(authUser.displayName || ""),
+        role: "owner",
+        status: "active",
+        actorUid: input.actorUid,
+      }),
+    },
+  });
+
+  if (input.actorUid && input.actorEmail) {
+    await writeAuditLog({
+      actorUid: input.actorUid,
+      actorEmail: input.actorEmail,
+      targetUid: input.uid,
+      targetEmail: input.email,
+      action: input.action,
+      oldRole,
+      newRole: "owner",
+    });
+  }
+}
+
+async function bootstrapOwnersFromEnv(): Promise<void> {
+  const ownerEmails = configuredOwnerEmails();
   if (ownerEmails.length === 0) return;
 
   for (const email of ownerEmails) {
@@ -782,19 +830,11 @@ async function bootstrapOwnersFromEnv(): Promise<void> {
       const authUser = ((lookup.users as Array<Record<string, unknown>> | undefined) || [])[0];
       if (!authUser || typeof authUser.localId !== "string") continue;
       const uid = authUser.localId;
-      const oldClaimsRaw = typeof authUser.customAttributes === "string" ? JSON.parse(authUser.customAttributes) as Record<string, unknown> : {};
-      const nextClaims: Record<string, unknown> = { ...oldClaimsRaw, role: "owner", admin: true };
-      await identityToolkitCall("/accounts:update", { localId: uid, customAttributes: JSON.stringify(nextClaims) });
-      await firestoreCall(`users/${uid}`, {
-        method: "PATCH",
-        body: {
-          fields: toFirestoreUserFields({
-            email,
-            displayName: String(authUser.displayName || ""),
-            role: "owner",
-            status: "active",
-          }),
-        },
+      await applyOwnerRoleToUid({
+        uid,
+        email,
+        displayName: String(authUser.displayName || ""),
+        action: "bootstrap-owner-env",
       });
       auditLog("owner_bootstrap_applied", { email, uid });
     } catch (error) {
@@ -1167,6 +1207,57 @@ async function startServer() {
       return res.json({ users });
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to list users" });
+    }
+  });
+
+  app.get("/api/admin/bootstrap/status", async (req, res) => {
+    try {
+      const token = getBearerToken(req.headers.authorization);
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+      const verifiedUser = await verifyFirebaseUser(token);
+      if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
+
+      const ownerCount = await countOwnersFromUsersMirror();
+      const ownerEmails = configuredOwnerEmails();
+      const eligible = ownerCount === 0 && isEmailEligibleForOwnerBootstrap(verifiedUser.email);
+      return res.json({
+        ownerCount,
+        configured: ownerEmails.length > 0,
+        eligible,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to get bootstrap status" });
+    }
+  });
+
+  app.post("/api/admin/bootstrap/claim", async (req, res) => {
+    try {
+      const token = getBearerToken(req.headers.authorization);
+      if (!token) return res.status(401).json({ error: "Authentication required" });
+      const verifiedUser = await verifyFirebaseUser(token);
+      if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
+
+      if (!isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
+        return res.status(403).json({ error: "Signed-in email is not configured for owner bootstrap" });
+      }
+
+      const ownerCount = await countOwnersFromUsersMirror();
+      if (ownerCount > 0) {
+        return res.status(409).json({ error: "Owner already exists. Use Access Management for role changes." });
+      }
+
+      await applyOwnerRoleToUid({
+        uid: verifiedUser.uid,
+        email: verifiedUser.email || "",
+        displayName: "",
+        actorUid: verifiedUser.uid,
+        actorEmail: verifiedUser.email || "",
+        action: "bootstrap-owner-self-service",
+      });
+
+      return res.json({ success: true, message: "Owner access granted. Refresh your token to continue." });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to claim owner access" });
     }
   });
 

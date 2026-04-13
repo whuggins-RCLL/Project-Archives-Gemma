@@ -32,7 +32,15 @@ function InternalApp() {
   const [isSidebarMobileOpen, setIsSidebarMobileOpen] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
-  const { canEditContent, canManageRoles, canManageSettings, loadingRole, roleLabel } = useUserRole();
+  const {
+    canEditContent,
+    canManageRoles,
+    canManageSettings,
+    canViewSettings,
+    loadingRole,
+    roleLabel,
+    refreshRoleClaims,
+  } = useUserRole();
   const modalRef = useRef<HTMLDivElement | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
@@ -168,9 +176,9 @@ function InternalApp() {
       case 'record':
         return <RecordView projects={projects} loading={loadingProjects} projectId={selectedProjectId} onBack={() => setCurrentView('kanban')} isAdmin={canEditContent} />;
       case 'settings':
-        return <SettingsView isAdmin={canManageSettings} loadingRole={loadingRole} />;
+        return <SettingsView canManageSettings={canManageSettings} canViewSettings={canViewSettings} loadingRole={loadingRole} />;
       case 'admin-users':
-        return <AdminUsersView canManageRoles={canManageRoles} />;
+        return <AdminUsersView canManageRoles={canManageRoles} onRoleRefreshRequested={refreshRoleClaims} />;
       default:
         return <KanbanView projects={projects} loading={loadingProjects} onProjectClick={handleProjectClick} onNewProject={openNewProjectModal} isAdmin={canEditContent} />;
     }
@@ -183,6 +191,7 @@ function InternalApp() {
         setCurrentView={setCurrentView}
         onNewProject={openNewProjectModal}
         canEditContent={canEditContent}
+        canViewSettings={canViewSettings}
         canManageSettings={canManageSettings}
         canManageRoles={canManageRoles}
         isMobileOpen={isSidebarMobileOpen}
@@ -199,6 +208,7 @@ function InternalApp() {
         <Topbar
           roleLabel={roleLabel}
           onOpenSettings={() => setCurrentView('settings')}
+          canViewSettings={canViewSettings}
           canManageSettings={canManageSettings}
         />
         <main
