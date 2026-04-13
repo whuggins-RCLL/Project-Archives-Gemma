@@ -8,10 +8,16 @@ export default function Topbar({
   roleLabel,
   onOpenSettings,
   canManageSettings,
+  canToggleViewAsRegularUser,
+  isViewingAsRegularUser,
+  onToggleViewAsRegularUser,
 }: {
   roleLabel: string,
   onOpenSettings: () => void,
   canManageSettings: boolean,
+  canToggleViewAsRegularUser: boolean,
+  isViewingAsRegularUser: boolean,
+  onToggleViewAsRegularUser: () => void,
 }) {
   const navigate = useNavigate();
 
@@ -50,6 +56,15 @@ export default function Topbar({
         </div>
       </div>
       <div className="flex items-center space-x-6">
+        {canToggleViewAsRegularUser && (
+          <button
+            onClick={onToggleViewAsRegularUser}
+            className={`hidden md:inline-flex px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${isViewingAsRegularUser ? 'bg-amber-100 text-amber-800 hover:bg-amber-200' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+            title="Toggle regular-user preview"
+          >
+            {isViewingAsRegularUser ? 'Exit view-as user' : 'View as user'}
+          </button>
+        )}
         <div className="flex space-x-2">
           <button
             aria-label="Open notifications. You have unread notifications"

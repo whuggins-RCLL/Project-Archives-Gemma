@@ -44,6 +44,10 @@ export function canEditContent(role: AppRole): boolean {
   return role === 'owner' || role === 'admin' || role === 'collaborator';
 }
 
+export function canCreateProjects(role: AppRole): boolean {
+  return role === 'owner' || role === 'admin' || role === 'collaborator' || role === 'viewer';
+}
+
 export function canViewInternalStats(role: AppRole): boolean {
   return role === 'owner' || role === 'admin' || role === 'collaborator' || role === 'viewer';
 }

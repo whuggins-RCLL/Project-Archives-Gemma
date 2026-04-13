@@ -6,7 +6,7 @@ export default function Sidebar({
   currentView,
   setCurrentView,
   onNewProject,
-  canEditContent,
+  canCreateProjects,
   canManageSettings,
   canManageRoles,
   isMobileOpen,
@@ -15,7 +15,7 @@ export default function Sidebar({
   currentView: string,
   setCurrentView: (v: string) => void,
   onNewProject: () => void,
-  canEditContent: boolean,
+  canCreateProjects: boolean,
   canManageSettings: boolean,
   canManageRoles: boolean,
   isMobileOpen: boolean,
@@ -83,8 +83,8 @@ export default function Sidebar({
             onNewProject();
             onMobileClose();
           }}
-          disabled={!canEditContent}
-          title={canEditContent ? 'Create a new project' : 'You need editor access to create projects'}
+          disabled={!canCreateProjects}
+          title={canCreateProjects ? 'Create a new project' : 'You do not have access to create projects'}
           variant="primary"
           className="w-full py-3 rounded-lg"
         >

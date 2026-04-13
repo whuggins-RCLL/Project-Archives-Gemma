@@ -3,6 +3,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import {
   AppRole,
+  canCreateProjects,
   canEditContent,
   canManageRoles,
   canManageSettings,
@@ -47,6 +48,7 @@ export function useUserRole() {
     isViewer: role === 'viewer',
     canManageRoles: canManageRoles(role),
     canManageSettings: canManageSettings(role),
+    canCreateProjects: canCreateProjects(role),
     canEditContent: canEditContent(role),
     canViewInternalStats: canViewInternalStats(role),
     loadingRole,
