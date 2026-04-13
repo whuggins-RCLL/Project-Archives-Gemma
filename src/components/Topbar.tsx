@@ -6,11 +6,19 @@ import { APP_CONFIG } from '../config';
 
 export default function Topbar({
   roleLabel,
+  rawRole,
+  roleError,
+  refreshingRole,
+  onRefreshPermissions,
   onOpenSettings,
   canViewSettings,
   canManageSettings,
 }: {
   roleLabel: string,
+  rawRole: string,
+  roleError: string | null,
+  refreshingRole: boolean,
+  onRefreshPermissions: () => Promise<void>,
   onOpenSettings: () => void,
   canViewSettings: boolean,
   canManageSettings: boolean,
@@ -52,6 +60,17 @@ export default function Topbar({
         </div>
       </div>
       <div className="flex items-center space-x-6">
+        <div className="hidden lg:flex flex-col items-end gap-1">
+          <button
+            type="button"
+            className="text-[11px] px-2 py-1 border rounded-md hover:bg-slate-50 disabled:opacity-60"
+            onClick={() => void onRefreshPermissions()}
+            disabled={refreshingRole}
+          >
+            {refreshingRole ? 'Refreshing permissions…' : 'Refresh permissions'}
+          </button>
+          {roleError && <p className="text-[10px] text-error">{roleError}</p>}
+        </div>
         <div className="flex space-x-2">
           <button
             aria-label="Open notifications. You have unread notifications"
@@ -87,7 +106,7 @@ export default function Topbar({
         <div className="flex items-center space-x-3 pl-2">
           <div className="text-right hidden md:block">
             <p className="text-xs font-bold text-brand-dark">{auth.currentUser?.displayName || 'Librarian Alpha'}</p>
-            <p className="text-[10px] text-on-surface-variant">{roleLabel}</p>
+            <p className="text-[10px] text-on-surface-variant" title={`Role key: ${rawRole}`}>{roleLabel}</p>
           </div>
           <img
             alt="Librarian Profile"

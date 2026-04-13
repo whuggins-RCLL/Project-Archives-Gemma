@@ -74,6 +74,7 @@ export const api = {
   refreshCurrentUserClaims: async (forceRefresh = true): Promise<void> => {
     if (!auth.currentUser) throw new Error('You must be logged in to refresh claims.');
     await auth.currentUser.getIdToken(forceRefresh);
+    await auth.currentUser.getIdTokenResult(forceRefresh);
   },
 
   getSettings: async (): Promise<Settings> => {

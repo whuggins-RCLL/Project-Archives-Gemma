@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Shield, Search } from 'lucide-react';
 import { api } from '../lib/api';
+import { auth } from '../lib/firebase';
 import { AdminAuditEntry, AppRole, ManagedUser } from '../types';
 
 const ROLE_FILTERS: Array<AppRole | 'all'> = ['all', 'owner', 'admin', 'collaborator', 'viewer'];
@@ -12,7 +13,15 @@ function badgeClass(role: AppRole): string {
   return 'bg-slate-100 text-slate-700';
 }
 
-export default function AdminUsersView({ canManageRoles, onRoleRefreshRequested }: { canManageRoles: boolean; onRoleRefreshRequested?: () => Promise<void> }) {
+export default function AdminUsersView({
+  canManageRoles,
+  onRoleRefreshRequested,
+  currentRole,
+}: {
+  canManageRoles: boolean;
+  onRoleRefreshRequested?: () => Promise<void>;
+  currentRole: AppRole;
+}) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [audit, setAudit] = useState<AdminAuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,6 +64,9 @@ export default function AdminUsersView({ canManageRoles, onRoleRefreshRequested 
       const message = await api.setUserRole(uid, role);
       setToast(`${message} Users can click "Refresh my access" to pull new claims immediately.`);
       await load();
+      if (uid === auth.currentUser?.uid && onRoleRefreshRequested) {
+        await onRoleRefreshRequested();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Role update failed');
     }
@@ -87,6 +99,9 @@ export default function AdminUsersView({ canManageRoles, onRoleRefreshRequested 
     }
   };
 
+  const currentUserMirrorRole = users.find((user) => user.uid === auth.currentUser?.uid)?.role;
+  const roleMismatch = Boolean(currentUserMirrorRole && currentUserMirrorRole !== currentRole);
+
   if (!canManageRoles) {
     return <div className="p-10 text-center"><Shield className="mx-auto w-14 h-14 text-error" /><h2 className="text-2xl font-bold mt-2">Access Denied</h2><p className="text-on-surface-variant">Only owners can manage roles.</p></div>;
   }
@@ -103,6 +118,11 @@ export default function AdminUsersView({ canManageRoles, onRoleRefreshRequested 
           </button>
         </div>
       </div>
+      {roleMismatch && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
+          Your user record role is <strong>{currentUserMirrorRole}</strong>, but your active token role is <strong>{currentRole}</strong>. Refresh permissions to sync this session.
+        </div>
+      )}
       <div className="bg-white rounded-xl border p-4 flex gap-3 items-center">
         <Search className="w-4 h-4 text-slate-500" />
         <input className="flex-1 outline-none" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, email, uid" />

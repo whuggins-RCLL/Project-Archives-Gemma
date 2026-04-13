@@ -38,8 +38,11 @@ function InternalApp() {
     canManageSettings,
     canViewSettings,
     loadingRole,
+    refreshingRole,
+    roleError,
     roleLabel,
     refreshRoleClaims,
+    rawRole,
   } = useUserRole();
   const modalRef = useRef<HTMLDivElement | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
@@ -176,9 +179,9 @@ function InternalApp() {
       case 'record':
         return <RecordView projects={projects} loading={loadingProjects} projectId={selectedProjectId} onBack={() => setCurrentView('kanban')} isAdmin={canEditContent} />;
       case 'settings':
-        return <SettingsView canManageSettings={canManageSettings} canViewSettings={canViewSettings} loadingRole={loadingRole} />;
+        return <SettingsView canManageSettings={canManageSettings} canViewSettings={canViewSettings} loadingRole={loadingRole} onRoleRefreshRequested={refreshRoleClaims} />;
       case 'admin-users':
-        return <AdminUsersView canManageRoles={canManageRoles} onRoleRefreshRequested={refreshRoleClaims} />;
+        return <AdminUsersView canManageRoles={canManageRoles} onRoleRefreshRequested={refreshRoleClaims} currentRole={rawRole} />;
       default:
         return <KanbanView projects={projects} loading={loadingProjects} onProjectClick={handleProjectClick} onNewProject={openNewProjectModal} isAdmin={canEditContent} />;
     }
@@ -207,6 +210,10 @@ function InternalApp() {
         </button>
         <Topbar
           roleLabel={roleLabel}
+          rawRole={rawRole}
+          roleError={roleError}
+          refreshingRole={refreshingRole}
+          onRefreshPermissions={refreshRoleClaims}
           onOpenSettings={() => setCurrentView('settings')}
           canViewSettings={canViewSettings}
           canManageSettings={canManageSettings}
