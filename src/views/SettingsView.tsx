@@ -3,7 +3,17 @@ import { Settings as SettingsIcon, Save, Bot, Key, Shield } from 'lucide-react';
 import { api, Settings } from '../lib/api';
 import { AI_PROVIDER_OPTIONS } from '../lib/uiDefaults';
 
-export default function SettingsView({ canManageSettings, canViewSettings, loadingRole }: { canManageSettings: boolean, canViewSettings: boolean, loadingRole: boolean }) {
+export default function SettingsView({
+  canManageSettings,
+  canViewSettings,
+  loadingRole,
+  onRoleRefreshRequested,
+}: {
+  canManageSettings: boolean,
+  canViewSettings: boolean,
+  loadingRole: boolean,
+  onRoleRefreshRequested?: () => Promise<void>,
+}) {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [settings, setSettings] = useState<Settings>({
     aiEnabled: false,
@@ -91,8 +101,10 @@ export default function SettingsView({ canManageSettings, canViewSettings, loadi
       const result = await api.claimInitialOwnerAccess();
       setToast({ type: 'success', message: `${result.message} Refreshing claims...` });
       await api.refreshCurrentUserClaims(true);
+      if (onRoleRefreshRequested) {
+        await onRoleRefreshRequested();
+      }
       setBootstrapStatus((prev) => ({ ownerCount: Math.max(prev?.ownerCount ?? 0, 1), configured: prev?.configured ?? true, eligible: false }));
-      window.location.reload();
     } catch (error) {
       setToast({ type: 'error', message: error instanceof Error ? error.message : 'Unable to claim owner access.' });
     } finally {

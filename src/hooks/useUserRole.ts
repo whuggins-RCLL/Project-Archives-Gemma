@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { onIdTokenChanged } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import {
@@ -10,32 +10,49 @@ import {
   canViewInternalStats,
   isAdminRole,
   isOwnerRole,
-  normalizeRoleFromClaims,
   roleLabel,
 } from '../lib/roles';
+import { fetchRoleFromUserClaims, refreshRoleWithRetry } from '../lib/roleClaims';
 
 export function useUserRole() {
   const [role, setRole] = useState<AppRole>('viewer');
   const [loadingRole, setLoadingRole] = useState(true);
+  const [refreshingRole, setRefreshingRole] = useState(false);
+  const [roleError, setRoleError] = useState<string | null>(null);
 
-  const resolveRole = async (forceRefresh = false) => {
+  const resolveRole = useCallback(async (forceRefresh = false) => {
     const user = auth.currentUser;
     if (!user) {
       setRole('viewer');
       setLoadingRole(false);
+      setRoleError(null);
       return;
     }
 
     try {
-      const tokenResult = await user.getIdTokenResult(forceRefresh);
-      setRole(normalizeRoleFromClaims(tokenResult?.claims ?? {}));
+      const nextRole = forceRefresh
+        ? await refreshRoleWithRetry(user)
+        : await fetchRoleFromUserClaims(user, false);
+      setRole(nextRole);
+      setRoleError(null);
     } catch {
       console.error('Failed to resolve user role');
-      setRole('viewer');
+      if (!forceRefresh) {
+        setRole('viewer');
+      }
+      setRoleError('Unable to refresh permissions. Try "Refresh permissions" again.');
     } finally {
       setLoadingRole(false);
+      if (forceRefresh) {
+        setRefreshingRole(false);
+      }
     }
-  };
+  }, []);
+
+  const refreshRoleClaims = useCallback(async () => {
+    setRefreshingRole(true);
+    await resolveRole(true);
+  }, [resolveRole]);
 
   useEffect(() => {
     const unsubscribe = onIdTokenChanged(auth, () => {
@@ -43,7 +60,7 @@ export function useUserRole() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [resolveRole]);
 
   return {
     role,
@@ -57,7 +74,10 @@ export function useUserRole() {
     canEditContent: canEditContent(role),
     canViewInternalStats: canViewInternalStats(role),
     loadingRole,
+    refreshingRole,
+    roleError,
     roleLabel: roleLabel(role),
-    refreshRoleClaims: () => resolveRole(true),
+    refreshRoleClaims,
+    rawRole: role,
   };
 }
