@@ -16,7 +16,7 @@ const COLUMNS: { title: ProjectStatus; color: string; border: string }[] = [
   { title: 'Launched', color: 'bg-tertiary-fixed', border: 'border-tertiary-fixed-dim' }
 ];
 
-export default function KanbanView({ projects, loading, onProjectClick, onNewProject, isAdmin }: { projects: Project[], loading: boolean, onProjectClick: (id: string) => void, onNewProject: () => void, isAdmin: boolean }) {
+export default function KanbanView({ projects, loading, onProjectClick, onNewProject, isAdmin, canCreateProjects }: { projects: Project[], loading: boolean, onProjectClick: (id: string) => void, onNewProject: () => void, isAdmin: boolean, canCreateProjects: boolean }) {
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [filterQuery, setFilterQuery] = useState<ProjectFilterQuery>(DEFAULT_FILTER_QUERY);
   const [keyboardDraggedProjectId, setKeyboardDraggedProjectId] = useState<string | null>(null);
@@ -151,8 +151,8 @@ export default function KanbanView({ projects, loading, onProjectClick, onNewPro
             <div className="w-px h-8 bg-outline-variant/30 mx-2"></div>
             <Button
               onClick={onNewProject}
-              disabled={!isAdmin}
-              title={isAdmin ? 'Create a new project' : 'You need editor access to create projects'}
+              disabled={!canCreateProjects}
+              title={canCreateProjects ? 'Create a new project' : 'You do not have access to create projects'}
               variant="primary"
               className="px-6 py-2.5"
             >

@@ -21,6 +21,7 @@ import AdminUsersView from './views/AdminUsersView';
 import { api } from './lib/api';
 import { useUserRole } from './hooks/useUserRole';
 import { buildDefaultApprovalCheckpoints, buildDefaultMilestones } from './lib/projectGovernance';
+import { canCreateProjects as canCreateProjectsForRole, canEditContent as canEditContentForRole, canManageRoles as canManageRolesForRole, canManageSettings as canManageSettingsForRole, roleLabel as roleLabelForRole } from './lib/roles';
 
 import { Project } from './types';
 
@@ -32,7 +33,15 @@ function InternalApp() {
   const [isSidebarMobileOpen, setIsSidebarMobileOpen] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
-  const { canEditContent, canManageRoles, canManageSettings, loadingRole, roleLabel } = useUserRole();
+  const { role, loadingRole } = useUserRole();
+  const [isViewingAsRegularUser, setIsViewingAsRegularUser] = useState(false);
+  const effectiveRole = isViewingAsRegularUser ? 'viewer' : role;
+  const canManageRoles = canManageRolesForRole(effectiveRole);
+  const canManageSettings = canManageSettingsForRole(effectiveRole);
+  const canEditContent = canEditContentForRole(effectiveRole);
+  const canCreateProjects = canCreateProjectsForRole(effectiveRole);
+  const displayedRoleLabel = isViewingAsRegularUser ? `Viewing as ${roleLabelForRole(effectiveRole)}` : roleLabelForRole(effectiveRole);
+  const canToggleViewAsRegularUser = role === 'owner' || role === 'admin';
   const modalRef = useRef<HTMLDivElement | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
@@ -123,7 +132,7 @@ function InternalApp() {
   };
 
   const openNewProjectModal = () => {
-    if (!canEditContent) return;
+    if (!canCreateProjects) return;
     setIsNewProjectModalOpen(true);
   };
 
@@ -160,7 +169,7 @@ function InternalApp() {
   const renderView = () => {
     switch (currentView) {
       case 'kanban':
-        return <KanbanView projects={projects} loading={loadingProjects} onProjectClick={handleProjectClick} onNewProject={openNewProjectModal} isAdmin={canEditContent} />;
+        return <KanbanView projects={projects} loading={loadingProjects} onProjectClick={handleProjectClick} onNewProject={openNewProjectModal} isAdmin={canEditContent} canCreateProjects={canCreateProjects} />;
       case 'priority':
         return <PriorityView projects={projects} loading={loadingProjects} onProjectClick={handleProjectClick} />;
       case 'portfolio':
@@ -172,7 +181,7 @@ function InternalApp() {
       case 'admin-users':
         return <AdminUsersView canManageRoles={canManageRoles} />;
       default:
-        return <KanbanView projects={projects} loading={loadingProjects} onProjectClick={handleProjectClick} onNewProject={openNewProjectModal} isAdmin={canEditContent} />;
+        return <KanbanView projects={projects} loading={loadingProjects} onProjectClick={handleProjectClick} onNewProject={openNewProjectModal} isAdmin={canEditContent} canCreateProjects={canCreateProjects} />;
     }
   };
 
@@ -182,7 +191,7 @@ function InternalApp() {
         currentView={currentView}
         setCurrentView={setCurrentView}
         onNewProject={openNewProjectModal}
-        canEditContent={canEditContent}
+        canCreateProjects={canCreateProjects}
         canManageSettings={canManageSettings}
         canManageRoles={canManageRoles}
         isMobileOpen={isSidebarMobileOpen}
@@ -197,9 +206,12 @@ function InternalApp() {
           {isSidebarMobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
         <Topbar
-          roleLabel={roleLabel}
+          roleLabel={displayedRoleLabel}
           onOpenSettings={() => setCurrentView('settings')}
           canManageSettings={canManageSettings}
+          canToggleViewAsRegularUser={canToggleViewAsRegularUser}
+          isViewingAsRegularUser={isViewingAsRegularUser}
+          onToggleViewAsRegularUser={() => setIsViewingAsRegularUser((prev) => !prev)}
         />
         <main
           ref={mainContentRef}
@@ -252,7 +264,7 @@ function InternalApp() {
               </button>
               <button 
                 onClick={handleNewProject}
-                disabled={!canEditContent || !newProjectTitle.trim()}
+                disabled={!canCreateProjects || !newProjectTitle.trim()}
                 className="px-6 py-2 text-sm font-bold bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Create Project
