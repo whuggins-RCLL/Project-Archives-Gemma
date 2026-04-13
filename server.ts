@@ -507,6 +507,7 @@ async function verifyFirebaseUser(idToken: string): Promise<VerifiedUser | null>
     throw new Error("Firebase Web API key is not configured on the server");
   }
 
+  // Step 1: Validate the ID token via the public API to get the user's UID/email.
   const url = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${webApiKey}`;
   const response = await fetch(url, {
     method: "POST",
@@ -527,12 +528,24 @@ async function verifyFirebaseUser(idToken: string): Promise<VerifiedUser | null>
     return null;
   }
 
+  // Step 2: Fetch claims via the admin API which returns customAttributes.
+  // The public accounts:lookup endpoint does not include customAttributes in
+  // its response, so a separate admin lookup is required for role resolution.
   let claims: Record<string, unknown> = {};
-  if (user.customAttributes) {
-    try {
-      claims = JSON.parse(user.customAttributes);
-    } catch {
-      claims = {};
+  try {
+    const adminLookup = await identityToolkitCall("/accounts:lookup", { localId: [user.localId] });
+    const adminUser = ((adminLookup.users as Array<Record<string, unknown>> | undefined) || [])[0];
+    if (adminUser && typeof adminUser.customAttributes === "string") {
+      claims = JSON.parse(adminUser.customAttributes);
+    }
+  } catch {
+    // Fall back to public API customAttributes if admin lookup fails
+    if (user.customAttributes) {
+      try {
+        claims = JSON.parse(user.customAttributes);
+      } catch {
+        claims = {};
+      }
     }
   }
 
