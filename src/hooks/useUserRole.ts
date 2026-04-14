@@ -49,7 +49,14 @@ export function useUserRole() {
         ? await refreshRoleWithRetry(user)
         : await fetchRoleFromUserClaims(user, false);
       const authoritativeRole = serverRoleRef.current;
-      if (authoritativeRole && !hasMinimumRole(tokenRole, authoritativeRole)) {
+      if (forceRefresh && authoritativeRole) {
+        // During a forced refresh, prefer the server-reconciled role because
+        // Firebase custom claims can lag behind and return stale token claims.
+        setRole(authoritativeRole);
+        if (hasMinimumRole(tokenRole, authoritativeRole)) {
+          serverRoleRef.current = null;
+        }
+      } else if (authoritativeRole && !hasMinimumRole(tokenRole, authoritativeRole)) {
         setRole(authoritativeRole);
       } else {
         setRole(tokenRole);
