@@ -18,6 +18,8 @@ import { api } from '../lib/api';
 
 export function useUserRole() {
   const [role, setRole] = useState<AppRole>('viewer');
+  const [tokenRoleSnapshot, setTokenRoleSnapshot] = useState<AppRole>('viewer');
+  const [mirrorRoleSnapshot, setMirrorRoleSnapshot] = useState<AppRole | null>(null);
   const [loadingRole, setLoadingRole] = useState(true);
   const [refreshingRole, setRefreshingRole] = useState(false);
   const [roleError, setRoleError] = useState<string | null>(null);
@@ -48,19 +50,25 @@ export function useUserRole() {
       const tokenRole = forceRefresh
         ? await refreshRoleWithRetry(user)
         : await fetchRoleFromUserClaims(user, false);
+      const mirroredRole = await api.getCurrentUserMirrorRole();
+      setTokenRoleSnapshot(tokenRole);
+      setMirrorRoleSnapshot(mirroredRole);
+      const resolvedTokenRole = mirroredRole && hasMinimumRole(mirroredRole, tokenRole)
+        ? mirroredRole
+        : tokenRole;
       const authoritativeRole = serverRoleRef.current;
       if (forceRefresh && authoritativeRole) {
         // During a forced refresh, prefer the server-reconciled role because
         // Firebase custom claims can lag behind and return stale token claims.
         setRole(authoritativeRole);
-        if (hasMinimumRole(tokenRole, authoritativeRole)) {
+        if (hasMinimumRole(resolvedTokenRole, authoritativeRole)) {
           serverRoleRef.current = null;
         }
-      } else if (authoritativeRole && !hasMinimumRole(tokenRole, authoritativeRole)) {
+      } else if (authoritativeRole && !hasMinimumRole(resolvedTokenRole, authoritativeRole)) {
         setRole(authoritativeRole);
       } else {
-        setRole(tokenRole);
-        if (authoritativeRole && hasMinimumRole(tokenRole, authoritativeRole)) {
+        setRole(resolvedTokenRole);
+        if (authoritativeRole && hasMinimumRole(resolvedTokenRole, authoritativeRole)) {
           serverRoleRef.current = null;
         }
       }
@@ -110,5 +118,7 @@ export function useUserRole() {
     roleLabel: roleLabel(role),
     refreshRoleClaims,
     rawRole: role,
+    tokenRoleSnapshot,
+    mirrorRoleSnapshot,
   };
 }

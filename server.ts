@@ -3,7 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
 import { readFile } from "node:fs/promises";
-import { createSign, randomUUID } from "node:crypto";
+import { createSign, randomUUID, createHash, timingSafeEqual } from "node:crypto";
 import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
@@ -45,7 +45,7 @@ if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   }
 }
 
-const ALLOWED_PROVIDERS = new Set(["gemini", "openai", "anthropic", "gemma"]);
+const ALLOWED_PROVIDERS = new Set(["gemini", "openai", "anthropic", "gemma", "groc"]);
 const AI_RATE_LIMIT_WINDOW_MS = 60_000;
 const AI_RATE_LIMIT_MAX_REQUESTS = 20;
 const allowedOrigins = getAllowedCorsOrigins();
@@ -83,6 +83,11 @@ type AppSettings = {
   aiDuplicateDetectionEnabled: boolean;
   aiRequireHumanApproval: boolean;
   privacyMode: "public-read" | "private-read";
+  suiteName: string;
+  portalName: string;
+  logoDataUrl: string;
+  primaryColor: string;
+  brandDarkColor: string;
 };
 
 type VerifiedUser = {
@@ -138,6 +143,8 @@ const STAGE_TARGET_DAYS: Record<string, number> = {
   "Pilot / Testing": 14,
   "Review / Approval": 10,
 };
+const DEFAULT_BOOTSTRAP_OWNER_EMAIL = "whuggins@law.stanford.edu";
+const DEFAULT_ELEVATED_PASSWORD = "ChangeMe1234";
 
 function getClientIp(req: express.Request): string {
   const header = req.headers["x-forwarded-for"];
@@ -624,7 +631,19 @@ function validateSettings(input: unknown): AppSettings | null {
     typeof source.aiRequireHumanApproval !== "boolean" ||
     typeof source.activeProvider !== "string" ||
     !ALLOWED_PROVIDERS.has(source.activeProvider) ||
-    (source.privacyMode !== "public-read" && source.privacyMode !== "private-read")
+    (source.privacyMode !== "public-read" && source.privacyMode !== "private-read") ||
+    typeof source.suiteName !== "string" ||
+    source.suiteName.trim().length === 0 ||
+    source.suiteName.length > 80 ||
+    typeof source.portalName !== "string" ||
+    source.portalName.trim().length === 0 ||
+    source.portalName.length > 80 ||
+    typeof source.logoDataUrl !== "string" ||
+    source.logoDataUrl.length > 150_000 ||
+    typeof source.primaryColor !== "string" ||
+    !source.primaryColor.match(/^#[0-9A-Fa-f]{6}$/) ||
+    typeof source.brandDarkColor !== "string" ||
+    !source.brandDarkColor.match(/^#[0-9A-Fa-f]{6}$/)
   ) {
     return null;
   }
@@ -637,6 +656,11 @@ function validateSettings(input: unknown): AppSettings | null {
     aiDuplicateDetectionEnabled: source.aiDuplicateDetectionEnabled,
     aiRequireHumanApproval: source.aiRequireHumanApproval,
     privacyMode: source.privacyMode,
+    suiteName: source.suiteName.trim(),
+    portalName: source.portalName.trim(),
+    logoDataUrl: source.logoDataUrl,
+    primaryColor: source.primaryColor,
+    brandDarkColor: source.brandDarkColor,
   };
 }
 
@@ -649,6 +673,11 @@ function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?
     aiDuplicateDetectionEnabled: { booleanValue: settings.aiDuplicateDetectionEnabled },
     aiRequireHumanApproval: { booleanValue: settings.aiRequireHumanApproval },
     privacyMode: { stringValue: settings.privacyMode },
+    suiteName: { stringValue: settings.suiteName },
+    portalName: { stringValue: settings.portalName },
+    logoDataUrl: { stringValue: settings.logoDataUrl },
+    primaryColor: { stringValue: settings.primaryColor },
+    brandDarkColor: { stringValue: settings.brandDarkColor },
   };
 }
 
@@ -664,6 +693,11 @@ function fromFirestoreFields(
     aiDuplicateDetectionEnabled: fields.aiDuplicateDetectionEnabled?.booleanValue,
     aiRequireHumanApproval: fields.aiRequireHumanApproval?.booleanValue,
     privacyMode: fields.privacyMode?.stringValue as AppSettings["privacyMode"] | undefined,
+    suiteName: fields.suiteName?.stringValue,
+    portalName: fields.portalName?.stringValue,
+    logoDataUrl: fields.logoDataUrl?.stringValue,
+    primaryColor: fields.primaryColor?.stringValue,
+    brandDarkColor: fields.brandDarkColor?.stringValue,
   };
 }
 
@@ -861,10 +895,12 @@ async function writeAuditLog(entry: {
 }
 
 function configuredOwnerEmails(): string[] {
-  return (process.env.OWNER_EMAILS || "")
+  const configured = (process.env.OWNER_EMAILS || "")
     .split(",")
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
+  if (configured.length > 0) return configured;
+  return [DEFAULT_BOOTSTRAP_OWNER_EMAIL];
 }
 
 function isEmailEligibleForOwnerBootstrap(email: string | null | undefined): boolean {
@@ -879,7 +915,65 @@ function canClaimInitialOwnerAccess(user: VerifiedUser, ownerCount: number): boo
   if (isEmailEligibleForOwnerBootstrap(user.email)) return true;
   const ownerEmails = configuredOwnerEmails();
   if (ownerEmails.length > 0) return false;
-  return isInternalUser(user.claims);
+  return true;
+}
+
+async function getUserMirrorRoleAndPermissions(uid: string): Promise<{ role: AppRole | null; permissions: UserPermissionSet | null }> {
+  try {
+    const result = await firestoreCall(`users/${uid}`);
+    const parsed = parseFirestoreDocument(result as { name?: string; fields?: Record<string, Record<string, unknown>> });
+    const mirroredRole = validateRole(parsed.role);
+    if (!mirroredRole) return { role: null, permissions: null };
+    return {
+      role: mirroredRole,
+      permissions: sanitizePermissionSet(parsed.permissions, mirroredRole),
+    };
+  } catch {
+    return { role: null, permissions: null };
+  }
+}
+
+function hashPassword(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function safeCompareHash(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+
+async function getElevatedAccessConfig(): Promise<{ passwordHash: string; needsChange: boolean }> {
+  try {
+    const result = await firestoreCall("settings/global");
+    const parsed = parseFirestoreDocument(result as { name?: string; fields?: Record<string, Record<string, unknown>> });
+    const passwordHash = typeof parsed.elevatedPasswordHash === "string" && parsed.elevatedPasswordHash.length > 0
+      ? parsed.elevatedPasswordHash
+      : hashPassword(DEFAULT_ELEVATED_PASSWORD);
+    const needsChange = typeof parsed.elevatedPasswordNeedsChange === "boolean"
+      ? parsed.elevatedPasswordNeedsChange
+      : true;
+    return { passwordHash, needsChange };
+  } catch {
+    return { passwordHash: hashPassword(DEFAULT_ELEVATED_PASSWORD), needsChange: true };
+  }
+}
+
+async function saveElevatedAccessConfig(config: { passwordHash: string; needsChange: boolean }): Promise<void> {
+  await firestoreCall("settings/global", {
+    method: "PATCH",
+    body: {
+      fields: {
+        elevatedPasswordHash: { stringValue: config.passwordHash },
+        elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
+      },
+    },
+  });
+}
+
+async function resolveEffectiveRole(verifiedUser: VerifiedUser): Promise<AppRole> {
+  const mirror = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
+  if (mirror.role) return mirror.role;
+  return normalizeRoleFromClaims(verifiedUser.claims);
 }
 
 async function applyOwnerRoleToUid(input: { uid: string; email: string; displayName: string; actorUid?: string; actorEmail?: string; action: string }): Promise<void> {
@@ -1005,6 +1099,7 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
     console.log(`[auth/reconcile-role] started uid=${verifiedUser.uid} email=${verifiedUser.email || "unknown"}`);
 
     const currentRole = normalizeRoleFromClaims(verifiedUser.claims);
+    const mirrored = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
 
     if (currentRole !== "owner" && isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
       await applyOwnerRoleToUid({
@@ -1020,6 +1115,24 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
       return res.json({ role: "owner", reconciled: true });
     }
 
+    if (mirrored.role && mirrored.role !== currentRole) {
+      const auth = getAdminAuth();
+      const authUser = await auth.getUser(verifiedUser.uid);
+      const existingClaims = authUser.customClaims || {};
+      const nextPermissions = mirrored.permissions ?? defaultPermissionsForRole(mirrored.role);
+      const nextClaims: Record<string, unknown> = {
+        ...existingClaims,
+        role: mirrored.role,
+        permissions: nextPermissions,
+        admin: mirrored.role === "owner" || mirrored.role === "admin",
+      };
+      await auth.setCustomUserClaims(verifiedUser.uid, nextClaims);
+      await auth.revokeRefreshTokens(verifiedUser.uid);
+      await pause(120);
+      console.log(`[auth/reconcile-role] synced uid=${verifiedUser.uid} role=${mirrored.role}`);
+      return res.json({ role: mirrored.role, reconciled: true });
+    }
+
     await pause(120);
     console.log(`[auth/reconcile-role] no-op uid=${verifiedUser.uid} role=${currentRole}`);
     return res.json({ role: currentRole, reconciled: false });
@@ -1027,6 +1140,75 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
     console.error("[auth/reconcile-role] failed", error);
     await pause(120);
     return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to reconcile role" });
+  }
+});
+
+app.get("/api/auth/elevated/status", async (req, res) => {
+  try {
+    const token = getBearerToken(req.headers.authorization);
+    if (!token) return res.status(401).json({ error: "Authentication required" });
+    const verifiedUser = await verifyFirebaseUser(token);
+    if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
+    const role = await resolveEffectiveRole(verifiedUser);
+    if (role !== "owner" && role !== "admin") {
+      return res.json({ required: false, needsChange: false });
+    }
+    const config = await getElevatedAccessConfig();
+    return res.json({ required: true, needsChange: config.needsChange });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to read elevated auth status" });
+  }
+});
+
+app.post("/api/auth/elevated/login", async (req, res) => {
+  try {
+    const token = getBearerToken(req.headers.authorization);
+    if (!token) return res.status(401).json({ error: "Authentication required" });
+    const verifiedUser = await verifyFirebaseUser(token);
+    if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
+    const role = await resolveEffectiveRole(verifiedUser);
+    if (role !== "owner" && role !== "admin") {
+      return res.status(403).json({ error: "Elevated access is only for admins and owners" });
+    }
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!password) return res.status(400).json({ error: "Password is required" });
+    const config = await getElevatedAccessConfig();
+    const suppliedHash = hashPassword(password);
+    if (!safeCompareHash(suppliedHash, config.passwordHash)) {
+      return res.status(401).json({ error: "Invalid password" });
+    }
+    return res.json({ success: true, needsChange: config.needsChange });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to authenticate elevated access" });
+  }
+});
+
+app.post("/api/auth/elevated/change-password", async (req, res) => {
+  try {
+    const token = getBearerToken(req.headers.authorization);
+    if (!token) return res.status(401).json({ error: "Authentication required" });
+    const verifiedUser = await verifyFirebaseUser(token);
+    if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
+    const role = await resolveEffectiveRole(verifiedUser);
+    if (role !== "owner" && role !== "admin") {
+      return res.status(403).json({ error: "Elevated access is only for admins and owners" });
+    }
+    const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
+    const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: "Current and new password are required" });
+    if (newPassword.length < 8) return res.status(400).json({ error: "New password must be at least 8 characters" });
+    const config = await getElevatedAccessConfig();
+    const currentHash = hashPassword(currentPassword);
+    if (!safeCompareHash(currentHash, config.passwordHash)) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    await saveElevatedAccessConfig({
+      passwordHash: hashPassword(newPassword),
+      needsChange: false,
+    });
+    return res.json({ success: true, message: "Password updated successfully" });
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to change elevated password" });
   }
 });
 
@@ -1144,6 +1326,23 @@ app.post("/api/ai/generate", async (req, res) => {
       const openai = new OpenAI({
         apiKey: process.env.GEMMA_API_KEY,
         baseURL: process.env.GEMMA_BASE_URL
+      });
+      const messages: Array<{ role: "system" | "user"; content: string }> = [];
+      if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
+      messages.push({ role: "user", content: prompt });
+
+      const response = await openai.chat.completions.create({
+        model,
+        messages
+      });
+      responseText = response.choices[0]?.message?.content || "";
+    } else if (provider === "groc") {
+      if (!process.env.GROC_API_KEY || !process.env.GROC_BASE_URL) {
+        throw new Error("Groc provider is not configured");
+      }
+      const openai = new OpenAI({
+        apiKey: process.env.GROC_API_KEY,
+        baseURL: process.env.GROC_BASE_URL
       });
       const messages: Array<{ role: "system" | "user"; content: string }> = [];
       if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
