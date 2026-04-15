@@ -45,7 +45,7 @@ if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   }
 }
 
-const ALLOWED_PROVIDERS = new Set(["gemini", "openai", "anthropic", "gemma"]);
+const ALLOWED_PROVIDERS = new Set(["gemini", "openai", "anthropic", "gemma", "groc"]);
 const AI_RATE_LIMIT_WINDOW_MS = 60_000;
 const AI_RATE_LIMIT_MAX_REQUESTS = 20;
 const allowedOrigins = getAllowedCorsOrigins();
@@ -83,6 +83,11 @@ type AppSettings = {
   aiDuplicateDetectionEnabled: boolean;
   aiRequireHumanApproval: boolean;
   privacyMode: "public-read" | "private-read";
+  suiteName: string;
+  portalName: string;
+  logoDataUrl: string;
+  primaryColor: string;
+  brandDarkColor: string;
 };
 
 type VerifiedUser = {
@@ -624,7 +629,19 @@ function validateSettings(input: unknown): AppSettings | null {
     typeof source.aiRequireHumanApproval !== "boolean" ||
     typeof source.activeProvider !== "string" ||
     !ALLOWED_PROVIDERS.has(source.activeProvider) ||
-    (source.privacyMode !== "public-read" && source.privacyMode !== "private-read")
+    (source.privacyMode !== "public-read" && source.privacyMode !== "private-read") ||
+    typeof source.suiteName !== "string" ||
+    source.suiteName.trim().length === 0 ||
+    source.suiteName.length > 80 ||
+    typeof source.portalName !== "string" ||
+    source.portalName.trim().length === 0 ||
+    source.portalName.length > 80 ||
+    typeof source.logoDataUrl !== "string" ||
+    source.logoDataUrl.length > 150_000 ||
+    typeof source.primaryColor !== "string" ||
+    !source.primaryColor.match(/^#[0-9A-Fa-f]{6}$/) ||
+    typeof source.brandDarkColor !== "string" ||
+    !source.brandDarkColor.match(/^#[0-9A-Fa-f]{6}$/)
   ) {
     return null;
   }
@@ -637,6 +654,11 @@ function validateSettings(input: unknown): AppSettings | null {
     aiDuplicateDetectionEnabled: source.aiDuplicateDetectionEnabled,
     aiRequireHumanApproval: source.aiRequireHumanApproval,
     privacyMode: source.privacyMode,
+    suiteName: source.suiteName.trim(),
+    portalName: source.portalName.trim(),
+    logoDataUrl: source.logoDataUrl,
+    primaryColor: source.primaryColor,
+    brandDarkColor: source.brandDarkColor,
   };
 }
 
@@ -649,6 +671,11 @@ function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?
     aiDuplicateDetectionEnabled: { booleanValue: settings.aiDuplicateDetectionEnabled },
     aiRequireHumanApproval: { booleanValue: settings.aiRequireHumanApproval },
     privacyMode: { stringValue: settings.privacyMode },
+    suiteName: { stringValue: settings.suiteName },
+    portalName: { stringValue: settings.portalName },
+    logoDataUrl: { stringValue: settings.logoDataUrl },
+    primaryColor: { stringValue: settings.primaryColor },
+    brandDarkColor: { stringValue: settings.brandDarkColor },
   };
 }
 
@@ -664,6 +691,11 @@ function fromFirestoreFields(
     aiDuplicateDetectionEnabled: fields.aiDuplicateDetectionEnabled?.booleanValue,
     aiRequireHumanApproval: fields.aiRequireHumanApproval?.booleanValue,
     privacyMode: fields.privacyMode?.stringValue as AppSettings["privacyMode"] | undefined,
+    suiteName: fields.suiteName?.stringValue,
+    portalName: fields.portalName?.stringValue,
+    logoDataUrl: fields.logoDataUrl?.stringValue,
+    primaryColor: fields.primaryColor?.stringValue,
+    brandDarkColor: fields.brandDarkColor?.stringValue,
   };
 }
 
@@ -1144,6 +1176,23 @@ app.post("/api/ai/generate", async (req, res) => {
       const openai = new OpenAI({
         apiKey: process.env.GEMMA_API_KEY,
         baseURL: process.env.GEMMA_BASE_URL
+      });
+      const messages: Array<{ role: "system" | "user"; content: string }> = [];
+      if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
+      messages.push({ role: "user", content: prompt });
+
+      const response = await openai.chat.completions.create({
+        model,
+        messages
+      });
+      responseText = response.choices[0]?.message?.content || "";
+    } else if (provider === "groc") {
+      if (!process.env.GROC_API_KEY || !process.env.GROC_BASE_URL) {
+        throw new Error("Groc provider is not configured");
+      }
+      const openai = new OpenAI({
+        apiKey: process.env.GROC_API_KEY,
+        baseURL: process.env.GROC_BASE_URL
       });
       const messages: Array<{ role: "system" | "user"; content: string }> = [];
       if (systemInstruction) messages.push({ role: "system", content: systemInstruction });
