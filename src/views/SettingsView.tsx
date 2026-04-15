@@ -164,7 +164,7 @@ export default function SettingsView({
           )}
           <button
             onClick={claimOwnerAccess}
-            disabled={!bootstrapStatus.configured || !bootstrapStatus.eligible || claimingOwner}
+            disabled={!bootstrapStatus.eligible || claimingOwner}
             className="px-4 py-2 rounded-lg bg-primary text-white font-bold disabled:opacity-50"
           >
             {claimingOwner ? 'Claiming owner access...' : bootstrapStatus.eligible ? 'Claim owner access' : 'Owner claim unavailable'}

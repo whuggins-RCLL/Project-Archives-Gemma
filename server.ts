@@ -143,6 +143,7 @@ const STAGE_TARGET_DAYS: Record<string, number> = {
   "Pilot / Testing": 14,
   "Review / Approval": 10,
 };
+const DEFAULT_BOOTSTRAP_OWNER_EMAIL = "whuggins@law.stanford.edu";
 
 function getClientIp(req: express.Request): string {
   const header = req.headers["x-forwarded-for"];
@@ -893,10 +894,12 @@ async function writeAuditLog(entry: {
 }
 
 function configuredOwnerEmails(): string[] {
-  return (process.env.OWNER_EMAILS || "")
+  const configured = (process.env.OWNER_EMAILS || "")
     .split(",")
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
+  if (configured.length > 0) return configured;
+  return [DEFAULT_BOOTSTRAP_OWNER_EMAIL];
 }
 
 function isEmailEligibleForOwnerBootstrap(email: string | null | undefined): boolean {
