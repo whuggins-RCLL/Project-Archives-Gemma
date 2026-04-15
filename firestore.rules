@@ -127,15 +127,23 @@ service cloud.firestore {
     }
 
     function isValidSettings(data) {
-      return hasRequiredFields(['aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode']) &&
-             hasOnlyAllowedFields(['aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode']) &&
+      return hasRequiredFields(['aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor']) &&
+             hasOnlyAllowedFields(['aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor']) &&
              data.aiEnabled is bool &&
-             data.activeProvider in ['gemini', 'openai', 'anthropic', 'gemma'] &&
+             data.activeProvider in ['gemini', 'openai', 'anthropic', 'gemma', 'groc'] &&
              data.aiNextBestActionEnabled is bool &&
              data.aiRiskNarrativeEnabled is bool &&
              data.aiDuplicateDetectionEnabled is bool &&
              data.aiRequireHumanApproval is bool &&
-             data.privacyMode in ['public-read', 'private-read'];
+             data.privacyMode in ['public-read', 'private-read'] &&
+             isValidString(data.suiteName, 1, 80) &&
+             isValidString(data.portalName, 1, 80) &&
+             data.logoDataUrl is string &&
+             data.logoDataUrl.size() <= 150000 &&
+             data.primaryColor is string &&
+             data.primaryColor.matches('^#[0-9A-Fa-f]{6}$') &&
+             data.brandDarkColor is string &&
+             data.brandDarkColor.matches('^#[0-9A-Fa-f]{6}$');
     }
 
     function currentPrivacyMode() {
@@ -168,7 +176,7 @@ service cloud.firestore {
     }
 
     match /settings/{settingId} {
-      allow read: if isInternalUser();
+      allow read: if settingId == 'global' || isInternalUser();
       allow write: if isInternalUser() && isAdminRole() && isValidSettings(request.resource.data);
     }
 
@@ -188,7 +196,11 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isInternalUser();
-      allow write: if isInternalUser() && isAdminRole() && isValidUserMirror(request.resource.data);
+      allow write: if isInternalUser() && isAdminRole() && isValidUserMirror(request.resource.data) &&
+        (
+          request.resource.data.role != 'owner' ||
+          isOwnerRole()
+        );
     }
 
     match /adminAudit/{entryId} {
