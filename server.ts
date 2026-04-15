@@ -911,7 +911,22 @@ function canClaimInitialOwnerAccess(user: VerifiedUser, ownerCount: number): boo
   if (isEmailEligibleForOwnerBootstrap(user.email)) return true;
   const ownerEmails = configuredOwnerEmails();
   if (ownerEmails.length > 0) return false;
-  return isInternalUser(user.claims);
+  return true;
+}
+
+async function getUserMirrorRoleAndPermissions(uid: string): Promise<{ role: AppRole | null; permissions: UserPermissionSet | null }> {
+  try {
+    const result = await firestoreCall(`users/${uid}`);
+    const parsed = parseFirestoreDocument(result as { name?: string; fields?: Record<string, Record<string, unknown>> });
+    const mirroredRole = validateRole(parsed.role);
+    if (!mirroredRole) return { role: null, permissions: null };
+    return {
+      role: mirroredRole,
+      permissions: sanitizePermissionSet(parsed.permissions, mirroredRole),
+    };
+  } catch {
+    return { role: null, permissions: null };
+  }
 }
 
 async function applyOwnerRoleToUid(input: { uid: string; email: string; displayName: string; actorUid?: string; actorEmail?: string; action: string }): Promise<void> {
@@ -1037,6 +1052,7 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
     console.log(`[auth/reconcile-role] started uid=${verifiedUser.uid} email=${verifiedUser.email || "unknown"}`);
 
     const currentRole = normalizeRoleFromClaims(verifiedUser.claims);
+    const mirrored = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
 
     if (currentRole !== "owner" && isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
       await applyOwnerRoleToUid({
@@ -1050,6 +1066,24 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
       await pause(120);
       console.log(`[auth/reconcile-role] promoted to owner uid=${verifiedUser.uid}`);
       return res.json({ role: "owner", reconciled: true });
+    }
+
+    if (mirrored.role && mirrored.role !== currentRole) {
+      const auth = getAdminAuth();
+      const authUser = await auth.getUser(verifiedUser.uid);
+      const existingClaims = authUser.customClaims || {};
+      const nextPermissions = mirrored.permissions ?? defaultPermissionsForRole(mirrored.role);
+      const nextClaims: Record<string, unknown> = {
+        ...existingClaims,
+        role: mirrored.role,
+        permissions: nextPermissions,
+        admin: mirrored.role === "owner" || mirrored.role === "admin",
+      };
+      await auth.setCustomUserClaims(verifiedUser.uid, nextClaims);
+      await auth.revokeRefreshTokens(verifiedUser.uid);
+      await pause(120);
+      console.log(`[auth/reconcile-role] synced uid=${verifiedUser.uid} role=${mirrored.role}`);
+      return res.json({ role: mirrored.role, reconciled: true });
     }
 
     await pause(120);

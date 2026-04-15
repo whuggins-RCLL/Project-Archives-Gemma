@@ -158,8 +158,8 @@ export default function SettingsView({
             </p>
           ) : (
             <p>
-              No owner accounts exist yet. Since <code>OWNER_EMAILS</code> is not configured, the first signed-in internal user can claim owner access
-              here. If this button is disabled, ask your deployer to set <code>OWNER_EMAILS</code> (comma-separated) or verify internal claims.
+              No owner accounts exist yet. Since <code>OWNER_EMAILS</code> is not configured, the first signed-in user can claim owner access
+              here.
             </p>
           )}
           <button
