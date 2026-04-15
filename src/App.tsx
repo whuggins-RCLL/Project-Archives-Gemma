@@ -44,6 +44,8 @@ function InternalApp() {
     roleLabel,
     refreshRoleClaims,
     rawRole,
+    tokenRoleSnapshot,
+    mirrorRoleSnapshot,
   } = useUserRole();
   const modalRef = useRef<HTMLDivElement | null>(null);
   const { branding, settings } = useBranding();
@@ -225,6 +227,8 @@ function InternalApp() {
           canViewSettings={canViewSettings}
           canManageSettings={canManageSettings}
           branding={branding}
+          tokenRoleSnapshot={tokenRoleSnapshot}
+          mirrorRoleSnapshot={mirrorRoleSnapshot}
         />
         <main
           ref={mainContentRef}

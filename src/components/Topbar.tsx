@@ -15,6 +15,8 @@ export default function Topbar({
   canViewSettings,
   canManageSettings,
   branding,
+  tokenRoleSnapshot,
+  mirrorRoleSnapshot,
 }: {
   roleLabel: string,
   rawRole: string,
@@ -28,6 +30,8 @@ export default function Topbar({
     appName: string;
     logoUrl?: string;
   },
+  tokenRoleSnapshot: string;
+  mirrorRoleSnapshot: string | null;
 }) {
   const navigate = useNavigate();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -145,6 +149,9 @@ export default function Topbar({
           <div className="text-right hidden md:block">
             <p className="text-xs font-bold text-brand-dark">{auth.currentUser?.displayName || 'Librarian Alpha'}</p>
             <p className="text-[10px] text-on-surface-variant" title={`Role key: ${rawRole}`}>{roleLabel}</p>
+            <p className="text-[9px] text-on-surface-variant/80" title="Role debug source">
+              Token: {tokenRoleSnapshot} | Mirror: {mirrorRoleSnapshot ?? 'none'}
+            </p>
           </div>
           <img
             alt="Librarian Profile"

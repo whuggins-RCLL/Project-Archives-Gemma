@@ -76,6 +76,23 @@ export interface AddCommentOptions {
 }
 
 export const api = {
+  getCurrentUserMirrorRole: async (): Promise<AppRole | null> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser?.uid) return null;
+    try {
+      const userRef = doc(db, 'users', currentUser.uid);
+      const snap = await getDoc(userRef);
+      if (!snap.exists()) return null;
+      const role = snap.data()?.role;
+      if (role === 'owner' || role === 'admin' || role === 'collaborator' || role === 'viewer') {
+        return role;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
   refreshCurrentUserClaims: async (forceRefresh = true): Promise<void> => {
     if (!auth.currentUser) throw new Error('You must be logged in to refresh claims.');
     await auth.currentUser.getIdTokenResult(forceRefresh);
