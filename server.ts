@@ -994,21 +994,51 @@ async function resolveEffectiveRole(verifiedUser: VerifiedUser): Promise<AppRole
 }
 
 async function applyOwnerRoleToUid(input: { uid: string; email: string; displayName: string; actorUid?: string; actorEmail?: string; action: string }): Promise<void> {
-  const auth = getAdminAuth();
-  const authUser = await auth.getUser(input.uid);
-  const oldClaimsRaw = authUser.customClaims || {};
+  // Fetch current claims — try Admin SDK first, fall back to Identity Toolkit REST
+  let oldClaimsRaw: Record<string, unknown> = {};
+  let resolvedDisplayName = input.displayName || "";
+  if (adminAuth) {
+    try {
+      const authUser = await adminAuth.getUser(input.uid);
+      oldClaimsRaw = authUser.customClaims || {};
+      if (!resolvedDisplayName) resolvedDisplayName = authUser.displayName || "";
+    } catch { /* fall back to identity toolkit */ }
+  }
+  if (Object.keys(oldClaimsRaw).length === 0) {
+    try {
+      const lookup = await identityToolkitCall("/accounts:lookup", { localId: [input.uid] });
+      const lookedUp = ((lookup.users as Array<{ customAttributes?: string; displayName?: string }> | undefined) || [])[0];
+      if (typeof lookedUp?.customAttributes === "string" && lookedUp.customAttributes.trim().length > 0) {
+        oldClaimsRaw = JSON.parse(lookedUp.customAttributes) as Record<string, unknown>;
+      }
+      if (!resolvedDisplayName && typeof lookedUp?.displayName === "string") {
+        resolvedDisplayName = lookedUp.displayName;
+      }
+    } catch { /* proceed with empty claims */ }
+  }
+
   const oldRole = normalizeRoleFromClaims(oldClaimsRaw);
   const nextPermissions = defaultPermissionsForRole("owner");
   const nextClaims: Record<string, unknown> = { ...oldClaimsRaw, role: "owner", admin: true, permissions: nextPermissions };
 
-  await auth.setCustomUserClaims(input.uid, nextClaims);
-  await auth.revokeRefreshTokens(input.uid);
+  // Set custom claims — Admin SDK preferred; fall back to Identity Toolkit REST
+  if (adminAuth) {
+    await adminAuth.setCustomUserClaims(input.uid, nextClaims);
+    await adminAuth.revokeRefreshTokens(input.uid);
+  } else {
+    await identityToolkitCall("/accounts:update", {
+      localId: input.uid,
+      customAttributes: JSON.stringify(nextClaims),
+      validSince: String(Math.floor(Date.now() / 1000)),
+    });
+  }
+
   await firestoreCall(`users/${input.uid}`, {
     method: "PATCH",
     body: {
       fields: toFirestoreUserFields({
         email: input.email,
-        displayName: input.displayName || authUser.displayName || "",
+        displayName: resolvedDisplayName,
         role: "owner",
         permissions: nextPermissions,
         status: "active",
@@ -1543,9 +1573,8 @@ app.get("/api/admin/users/list", async (req, res) => {
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
 
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
-    if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
+    const callerRole = await resolveEffectiveRole(verifiedUser);
+    if (!isAdminRole(callerRole)) return res.status(403).json({ error: "Manage roles permission required" });
 
     const result = await firestoreCall("users?pageSize=500");
     const documents = (result.documents as Array<{ name?: string; fields?: Record<string, Record<string, unknown>> }> | undefined) || [];
@@ -1631,9 +1660,8 @@ app.get("/api/admin/users/audit", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
-    if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
+    const callerRole = await resolveEffectiveRole(verifiedUser);
+    if (!isAdminRole(callerRole)) return res.status(403).json({ error: "Manage roles permission required" });
     const result = await firestoreCall("adminAudit?pageSize=100");
     const documents = (result.documents as Array<{ name?: string; fields?: Record<string, Record<string, unknown>> }> | undefined) || [];
     const audit = documents.map((doc) => parseFirestoreDocument(doc as { name?: string; fields?: Record<string, Record<string, unknown>> }));
@@ -1649,9 +1677,8 @@ app.post("/api/admin/users/set-role", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
-    if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
+    const callerRole = await resolveEffectiveRole(verifiedUser);
+    if (!isAdminRole(callerRole)) return res.status(403).json({ error: "Manage roles permission required" });
 
     const targetUid = typeof req.body?.uid === "string" ? req.body.uid : "";
     const nextRole = validateRole(req.body?.role);
@@ -1716,9 +1743,8 @@ app.post("/api/admin/users/:action(enable|disable)", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
-    if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
+    const callerRole = await resolveEffectiveRole(verifiedUser);
+    if (!isAdminRole(callerRole)) return res.status(403).json({ error: "Manage roles permission required" });
     const targetUid = typeof req.body?.uid === "string" ? req.body.uid : "";
     if (!targetUid) return res.status(400).json({ error: "uid is required" });
     const disableUser = req.params.action === "disable";
@@ -1759,9 +1785,8 @@ app.post("/api/admin/users/set-permissions", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
-    if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
+    const callerRole = await resolveEffectiveRole(verifiedUser);
+    if (!isAdminRole(callerRole)) return res.status(403).json({ error: "Manage roles permission required" });
 
     const targetUid = typeof req.body?.uid === "string" ? req.body.uid : "";
     if (!targetUid) return res.status(400).json({ error: "uid is required" });
