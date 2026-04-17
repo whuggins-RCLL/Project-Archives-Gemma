@@ -1010,30 +1010,41 @@ async function applyOwnerRoleToUid(input: { uid: string; email: string; displayN
 
   await auth.setCustomUserClaims(input.uid, nextClaims);
   await auth.revokeRefreshTokens(input.uid);
-  await firestoreCall(`users/${input.uid}`, {
-    method: "PATCH",
-    body: {
-      fields: toFirestoreUserFields({
-        email: input.email,
-        displayName: input.displayName || authUser.displayName || "",
-        role: "owner",
-        permissions: nextPermissions,
-        status: "active",
-        actorUid: input.actorUid,
-      }),
-    },
-  });
+
+  // Mirror write and audit are best-effort: a Firestore failure must not
+  // roll back the Auth claim update that already succeeded above.
+  try {
+    await firestoreCall(`users/${input.uid}`, {
+      method: "PATCH",
+      body: {
+        fields: toFirestoreUserFields({
+          email: input.email,
+          displayName: input.displayName || authUser.displayName || "",
+          role: "owner",
+          permissions: nextPermissions,
+          status: "active",
+          actorUid: input.actorUid,
+        }),
+      },
+    });
+  } catch (mirrorError) {
+    console.error(`[applyOwnerRoleToUid] Firestore mirror write failed for uid=${input.uid}:`, mirrorError);
+  }
 
   if (input.actorUid && input.actorEmail) {
-    await writeAuditLog({
-      actorUid: input.actorUid,
-      actorEmail: input.actorEmail,
-      targetUid: input.uid,
-      targetEmail: input.email,
-      action: input.action,
-      oldRole,
-      newRole: "owner",
-    });
+    try {
+      await writeAuditLog({
+        actorUid: input.actorUid,
+        actorEmail: input.actorEmail,
+        targetUid: input.uid,
+        targetEmail: input.email,
+        action: input.action,
+        oldRole,
+        newRole: "owner",
+      });
+    } catch (auditError) {
+      console.error(`[applyOwnerRoleToUid] Audit log write failed:`, auditError);
+    }
   }
 }
 
@@ -1112,6 +1123,21 @@ app.use("/api", (_req, _res, next) => {
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
+});
+
+app.get("/api/debug/env", (req, res) => {
+  res.json({
+    adminSdkInitialized: adminAuth !== null,
+    hasServiceAccountJson: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON),
+    hasFirebaseProjectId: Boolean(process.env.FIREBASE_PROJECT_ID),
+    hasViteFirebaseProjectId: Boolean(process.env.VITE_FIREBASE_PROJECT_ID),
+    hasGoogleCloudProject: Boolean(process.env.GOOGLE_CLOUD_PROJECT),
+    hasViteFirebaseApiKey: Boolean(process.env.VITE_FIREBASE_API_KEY),
+    hasOwnerEmails: Boolean(process.env.OWNER_EMAILS),
+    resolvedProjectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID || null,
+    nodeEnv: process.env.NODE_ENV || null,
+    isVercel: Boolean(process.env.VERCEL),
+  });
 });
 
 app.post("/api/auth/reconcile-role", async (req, res) => {
