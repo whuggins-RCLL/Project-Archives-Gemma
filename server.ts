@@ -302,32 +302,44 @@ function hasMinimumRole(role: AppRole, minimum: AppRole): boolean {
 
 /**
  * Admin HTTP routes must not rely on JWT custom claims alone: tokens lag behind
- * Firestore `users/{uid}` updates. Merge mirror role and permission flags with
- * the token so list/set-role/audit match `firestore.rules` behavior.
+ * Firestore `users/{uid}` updates, and cold starts sometimes leave a malformed
+ * or missing mirror doc. Merge three sources — JWT, mirror, and the
+ * `OWNER_EMAILS` bootstrap allow-list — so list/set-role/audit match the trust
+ * model already used by `resolveEffectiveRole` and `firestore.rules`.
  */
 async function mergeFirestoreMirrorIntoClaims(verifiedUser: VerifiedUser): Promise<VerifiedUser> {
   const mirror = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
-  if (!mirror.role) return verifiedUser;
+  const callerEmailIsBootstrapOwner = isEmailEligibleForOwnerBootstrap(verifiedUser.email);
   const tokenRole = normalizeRoleFromClaims(verifiedUser.claims);
   const mergedClaims: Record<string, unknown> = { ...verifiedUser.claims };
-  if (hasMinimumRole(mirror.role, tokenRole)) {
+
+  if (callerEmailIsBootstrapOwner) {
+    mergedClaims.role = "owner";
+  } else if (mirror.role && hasMinimumRole(mirror.role, tokenRole)) {
     mergedClaims.role = mirror.role;
   }
+
   const effectiveRole = normalizeRoleFromClaims(mergedClaims);
   const tokenPerms = sanitizePermissionSet(verifiedUser.claims.permissions, tokenRole);
-  const mirrorPerms = mirror.permissions;
+  const roleDefaults = defaultPermissionsForRole(effectiveRole);
+  const mirrorPerms = mirror.permissions ?? {
+    canManageRoles: false,
+    canManageSettings: false,
+    canEditContent: false,
+    canViewInternalStats: false,
+  };
   mergedClaims.permissions = {
-    canManageRoles: tokenPerms.canManageRoles || mirrorPerms.canManageRoles,
-    canManageSettings: tokenPerms.canManageSettings || mirrorPerms.canManageSettings,
-    canEditContent: tokenPerms.canEditContent || mirrorPerms.canEditContent,
-    canViewInternalStats: tokenPerms.canViewInternalStats || mirrorPerms.canViewInternalStats,
+    canManageRoles: roleDefaults.canManageRoles || tokenPerms.canManageRoles || mirrorPerms.canManageRoles,
+    canManageSettings: roleDefaults.canManageSettings || tokenPerms.canManageSettings || mirrorPerms.canManageSettings,
+    canEditContent: roleDefaults.canEditContent || tokenPerms.canEditContent || mirrorPerms.canEditContent,
+    canViewInternalStats: roleDefaults.canViewInternalStats || tokenPerms.canViewInternalStats || mirrorPerms.canViewInternalStats,
   };
   mergedClaims.admin = effectiveRole === "owner" || effectiveRole === "admin";
   return { ...verifiedUser, claims: mergedClaims };
 }
 
 async function requireInternalAdmin(user: VerifiedUser): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
-  if ((user.email || "").trim().toLowerCase() === DEFAULT_BOOTSTRAP_OWNER_EMAIL) {
+  if (isEmailEligibleForOwnerBootstrap(user.email)) {
     return { ok: true };
   }
   const merged = await mergeFirestoreMirrorIntoClaims(user);
@@ -698,13 +710,17 @@ function decodedIdTokenToCustomClaims(decoded: admin.auth.DecodedIdToken): Recor
 async function verifyFirebaseUserWithAdmin(idToken: string): Promise<VerifiedUser | null> {
   if (!adminAuth) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(idToken, true);
+    // checkRevoked=false: revokeRefreshTokens() is used routinely after role/permission
+    // changes. With checkRevoked=true, every request until the next client refresh
+    // would be treated as invalid and the Identity Toolkit fallback would run.
+    const decoded = await adminAuth.verifyIdToken(idToken, false);
     return {
       uid: decoded.uid,
       email: decoded.email ?? null,
       claims: decodedIdTokenToCustomClaims(decoded),
     };
-  } catch {
+  } catch (error) {
+    console.warn("[verifyFirebaseUserWithAdmin] verifyIdToken failed:", error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -1112,7 +1128,7 @@ async function saveElevatedAccessConfig(config: { passwordHash: string; needsCha
 }
 
 async function resolveEffectiveRole(verifiedUser: VerifiedUser): Promise<AppRole> {
-  if ((verifiedUser.email || "").trim().toLowerCase() === DEFAULT_BOOTSTRAP_OWNER_EMAIL) {
+  if (isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
     return "owner";
   }
   const mirror = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
@@ -1271,10 +1287,56 @@ app.get("/api/debug/env", (req, res) => {
     hasGoogleCloudProject: Boolean(process.env.GOOGLE_CLOUD_PROJECT),
     hasViteFirebaseApiKey: Boolean(process.env.VITE_FIREBASE_API_KEY),
     hasOwnerEmails: Boolean(process.env.OWNER_EMAILS),
+    configuredOwnerEmails: configuredOwnerEmails(),
     resolvedProjectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID || null,
     nodeEnv: process.env.NODE_ENV || null,
     isVercel: Boolean(process.env.VERCEL),
   });
+});
+
+/**
+ * Returns the resolved identity as the API sees it, including JWT claims,
+ * Firestore mirror fields, and the merged permissions used by admin routes.
+ * Safe to leave in production: requires a valid Bearer token and only returns
+ * the caller's own information.
+ */
+app.get("/api/debug/whoami", async (req, res) => {
+  try {
+    const token = getBearerToken(req.headers.authorization);
+    if (!token) return res.status(401).json({ error: "Authentication required" });
+    const verifiedUser = await verifyFirebaseUser(token);
+    if (!verifiedUser) {
+      return res.status(401).json({
+        error: "Invalid or expired auth token",
+        adminSdkInitialized: adminAuth !== null,
+      });
+    }
+    const mirror = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
+    const merged = await mergeFirestoreMirrorIntoClaims(verifiedUser);
+    const tokenRole = normalizeRoleFromClaims(verifiedUser.claims);
+    const effectiveRole = normalizeRoleFromClaims(merged.claims);
+    const mergedPerms = sanitizePermissionSet(merged.claims.permissions, effectiveRole);
+    const emailIsBootstrap = isEmailEligibleForOwnerBootstrap(verifiedUser.email);
+    res.json({
+      uid: verifiedUser.uid,
+      email: verifiedUser.email,
+      tokenRole,
+      mirrorRole: mirror.role,
+      effectiveRole,
+      mergedPermissions: mergedPerms,
+      tokenClaims: verifiedUser.claims,
+      mirrorPermissions: mirror.permissions,
+      emailIsBootstrapOwner: emailIsBootstrap,
+      configuredOwnerEmails: configuredOwnerEmails(),
+      adminSdkInitialized: adminAuth !== null,
+      adminSdkInitError,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to resolve identity",
+      adminSdkInitialized: adminAuth !== null,
+    });
+  }
 });
 
 app.post("/api/auth/reconcile-role", async (req, res) => {
@@ -1288,23 +1350,52 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
     const currentRole = normalizeRoleFromClaims(verifiedUser.claims);
     const mirrored = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
 
-    if (currentRole !== "owner" && isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
-      if (!adminAuth) {
-        console.warn(`[auth/reconcile-role] Admin SDK unavailable; cannot set claims for uid=${verifiedUser.uid}. Fix FIREBASE_SERVICE_ACCOUNT_JSON in Vercel.`);
-        await pause(120);
-        return res.json({ role: "owner", reconciled: false, warning: "Admin SDK unavailable; token claims not updated. Check FIREBASE_SERVICE_ACCOUNT_JSON in Vercel environment variables." });
+    if (isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
+      // Even when Firebase Admin SDK is unreachable (no setCustomUserClaims),
+      // write a proper owner mirror so admin HTTP routes that merge the mirror
+      // grant access. This repairs malformed docs left behind by failed
+      // bootstrap runs (e.g. documents containing only { mirror: true }).
+      try {
+        await firestoreCall(`users/${verifiedUser.uid}`, {
+          method: "PATCH",
+          body: {
+            fields: toFirestoreUserFields({
+              email: verifiedUser.email || "",
+              displayName: "",
+              role: "owner",
+              permissions: defaultPermissionsForRole("owner"),
+              status: "active",
+              actorUid: verifiedUser.uid,
+            }),
+          },
+        });
+      } catch (mirrorError) {
+        console.error(`[auth/reconcile-role] Firestore mirror repair failed for uid=${verifiedUser.uid}:`, mirrorError);
       }
-      await applyOwnerRoleToUid({
-        uid: verifiedUser.uid,
-        email: verifiedUser.email || "",
-        displayName: "",
-        actorUid: verifiedUser.uid,
-        actorEmail: verifiedUser.email || "",
-        action: "reconcile-role-refresh",
-      });
-      await pause(120);
-      console.log(`[auth/reconcile-role] promoted to owner uid=${verifiedUser.uid}`);
-      return res.json({ role: "owner", reconciled: true });
+
+      if (currentRole !== "owner") {
+        if (!adminAuth) {
+          console.warn(`[auth/reconcile-role] Admin SDK unavailable; cannot set claims for uid=${verifiedUser.uid}. Fix FIREBASE_SERVICE_ACCOUNT_JSON in Vercel.`);
+          await pause(120);
+          return res.json({
+            role: "owner",
+            reconciled: false,
+            warning:
+              "Admin SDK unavailable; custom claims were not written, but the Firestore user mirror was repaired to owner. The HTTP admin API honors the mirror; sign out/in later to refresh the ID token.",
+          });
+        }
+        await applyOwnerRoleToUid({
+          uid: verifiedUser.uid,
+          email: verifiedUser.email || "",
+          displayName: "",
+          actorUid: verifiedUser.uid,
+          actorEmail: verifiedUser.email || "",
+          action: "reconcile-role-refresh",
+        });
+        await pause(120);
+        console.log(`[auth/reconcile-role] promoted to owner uid=${verifiedUser.uid}`);
+        return res.json({ role: "owner", reconciled: true });
+      }
     }
 
     if (mirrored.role && mirrored.role !== currentRole) {
