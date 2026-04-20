@@ -672,8 +672,9 @@ async function verifyFirebaseUserWithAdmin(idToken: string): Promise<VerifiedUse
 }
 
 async function verifyFirebaseUser(idToken: string): Promise<VerifiedUser | null> {
-  const viaAdmin = await verifyFirebaseUserWithAdmin(idToken);
-  if (viaAdmin) return viaAdmin;
+  if (adminAuth) {
+    return verifyFirebaseUserWithAdmin(idToken);
+  }
 
   try {
     const apiKey = process.env.VITE_FIREBASE_API_KEY;
