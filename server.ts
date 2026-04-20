@@ -90,7 +90,9 @@ const ADMIN_SETTINGS_RATE_LIMIT_WINDOW_MS = 60_000;
 const ADMIN_SETTINGS_RATE_LIMIT_MAX_REQUESTS = 15;
 const ADMIN_OPERATIONS_RATE_LIMIT_WINDOW_MS = 60_000;
 const ADMIN_OPERATIONS_RATE_LIMIT_MAX_REQUESTS = 6;
-const ADMIN_SETTINGS_MAX_BODY_BYTES = 8 * 1024;
+// Settings payloads can include a logo data URL up to ~150KB plus the other
+// fields; size cap must comfortably exceed the schema limit in validateSettings.
+const ADMIN_SETTINGS_MAX_BODY_BYTES = 256 * 1024;
 const ADMIN_OPERATIONS_MAX_BODY_BYTES = 2 * 1024;
 const ADMIN_SETTINGS_TIMEOUT_MS = 8_000;
 const ADMIN_OPERATIONS_TIMEOUT_MS = 15_000;
@@ -111,6 +113,27 @@ type RateLimitEntry = {
   windowStart: number;
 };
 
+type TypographyFamily =
+  | "system"
+  | "inter"
+  | "roboto"
+  | "source-sans"
+  | "merriweather"
+  | "playfair"
+  | "ibm-plex-serif"
+  | "libre-baskerville";
+
+const TYPOGRAPHY_FAMILY_VALUES: ReadonlyArray<TypographyFamily> = [
+  "system",
+  "inter",
+  "roboto",
+  "source-sans",
+  "merriweather",
+  "playfair",
+  "ibm-plex-serif",
+  "libre-baskerville",
+];
+
 type AppSettings = {
   aiEnabled: boolean;
   activeProvider: string;
@@ -126,6 +149,9 @@ type AppSettings = {
   brandDarkColor: string;
   customFooter?: string;
   helpContactEmail?: string;
+  typographyFamily: TypographyFamily;
+  showRefreshPermissions: boolean;
+  showUserPermissionDetails: boolean;
 };
 
 type VerifiedUser = {
@@ -289,11 +315,61 @@ function isInternalUser(claims: Record<string, unknown>): boolean {
   );
 }
 
-function requireInternalAdmin(user: VerifiedUser): { ok: true } | { ok: false; status: number; error: string } {
-  if ((user.email || "").trim().toLowerCase() === DEFAULT_BOOTSTRAP_OWNER_EMAIL) {
+const ROLE_PRIORITY: Record<AppRole, number> = {
+  owner: 4,
+  admin: 3,
+  collaborator: 2,
+  viewer: 1,
+};
+
+function hasMinimumRole(role: AppRole, minimum: AppRole): boolean {
+  return ROLE_PRIORITY[role] >= ROLE_PRIORITY[minimum];
+}
+
+/**
+ * Admin HTTP routes must not rely on JWT custom claims alone: tokens lag behind
+ * Firestore `users/{uid}` updates, and cold starts sometimes leave a malformed
+ * or missing mirror doc. Merge three sources — JWT, mirror, and the
+ * `OWNER_EMAILS` bootstrap allow-list — so list/set-role/audit match the trust
+ * model already used by `resolveEffectiveRole` and `firestore.rules`.
+ */
+async function mergeFirestoreMirrorIntoClaims(verifiedUser: VerifiedUser): Promise<VerifiedUser> {
+  const mirror = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
+  const callerEmailIsBootstrapOwner = isEmailEligibleForOwnerBootstrap(verifiedUser.email);
+  const tokenRole = normalizeRoleFromClaims(verifiedUser.claims);
+  const mergedClaims: Record<string, unknown> = { ...verifiedUser.claims };
+
+  if (callerEmailIsBootstrapOwner) {
+    mergedClaims.role = "owner";
+  } else if (mirror.role && hasMinimumRole(mirror.role, tokenRole)) {
+    mergedClaims.role = mirror.role;
+  }
+
+  const effectiveRole = normalizeRoleFromClaims(mergedClaims);
+  const tokenPerms = sanitizePermissionSet(verifiedUser.claims.permissions, tokenRole);
+  const roleDefaults = defaultPermissionsForRole(effectiveRole);
+  const mirrorPerms = mirror.permissions ?? {
+    canManageRoles: false,
+    canManageSettings: false,
+    canEditContent: false,
+    canViewInternalStats: false,
+  };
+  mergedClaims.permissions = {
+    canManageRoles: roleDefaults.canManageRoles || tokenPerms.canManageRoles || mirrorPerms.canManageRoles,
+    canManageSettings: roleDefaults.canManageSettings || tokenPerms.canManageSettings || mirrorPerms.canManageSettings,
+    canEditContent: roleDefaults.canEditContent || tokenPerms.canEditContent || mirrorPerms.canEditContent,
+    canViewInternalStats: roleDefaults.canViewInternalStats || tokenPerms.canViewInternalStats || mirrorPerms.canViewInternalStats,
+  };
+  mergedClaims.admin = effectiveRole === "owner" || effectiveRole === "admin";
+  return { ...verifiedUser, claims: mergedClaims };
+}
+
+async function requireInternalAdmin(user: VerifiedUser): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  if (isEmailEligibleForOwnerBootstrap(user.email)) {
     return { ok: true };
   }
-  const role = normalizeRoleFromClaims(user.claims);
+  const merged = await mergeFirestoreMirrorIntoClaims(user);
+  const role = normalizeRoleFromClaims(merged.claims);
   // Owners have super privileges — bypass the internal domain/group check entirely
   if (isOwnerRole(role)) {
     return { ok: true };
@@ -301,7 +377,7 @@ function requireInternalAdmin(user: VerifiedUser): { ok: true } | { ok: false; s
   if (!isInternalUser(user.claims)) {
     return { ok: false, status: 403, error: "Internal domain/group authorization required" };
   }
-  const permissions = sanitizePermissionSet(user.claims.permissions, role);
+  const permissions = sanitizePermissionSet(merged.claims.permissions, role);
   if (!permissions.canManageSettings) {
     return { ok: false, status: 403, error: "Admin or owner role required" };
   }
@@ -402,11 +478,45 @@ function sanitizeServerError(error: unknown): string {
 }
 
 function getAllowedCorsOrigins(): string[] {
+  const origins = new Set<string>();
+
   const configuredOrigins = process.env.CORS_ALLOWED_ORIGINS || "";
-  return configuredOrigins
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  for (const origin of configuredOrigins.split(",")) {
+    const trimmed = origin.trim();
+    if (trimmed) origins.add(trimmed);
+  }
+
+  // Vercel exposes the current deployment's host. Same-origin fetches still
+  // send an Origin header in modern browsers, so without this the app would
+  // reject its own requests on non-custom-domain deployments.
+  if (process.env.VERCEL_URL) {
+    origins.add(`https://${process.env.VERCEL_URL}`);
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    origins.add(`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`);
+  }
+  if (process.env.VERCEL_BRANCH_URL) {
+    origins.add(`https://${process.env.VERCEL_BRANCH_URL}`);
+  }
+
+  return Array.from(origins);
+}
+
+/**
+ * Vercel preview and production deployments expose themselves on many hostnames
+ * (e.g. <project>-<hash>.vercel.app, <project>-git-<branch>.vercel.app, and
+ * custom domains). Same-origin fetches from the SPA still include an Origin
+ * header, so CORS must accept any *.vercel.app origin plus the configured
+ * production/custom hostname for this deployment to work out-of-the-box.
+ */
+function isVercelSameHostOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "https:") return false;
+    return url.hostname.endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
 }
 
 function getTrustProxySetting(): boolean | number {
@@ -660,13 +770,17 @@ function decodedIdTokenToCustomClaims(decoded: admin.auth.DecodedIdToken): Recor
 async function verifyFirebaseUserWithAdmin(idToken: string): Promise<VerifiedUser | null> {
   if (!adminAuth) return null;
   try {
-    const decoded = await adminAuth.verifyIdToken(idToken, true);
+    // checkRevoked=false: revokeRefreshTokens() is used routinely after role/permission
+    // changes. With checkRevoked=true, every request until the next client refresh
+    // would be treated as invalid and the Identity Toolkit fallback would run.
+    const decoded = await adminAuth.verifyIdToken(idToken, false);
     return {
       uid: decoded.uid,
       email: decoded.email ?? null,
       claims: decodedIdTokenToCustomClaims(decoded),
     };
-  } catch {
+  } catch (error) {
+    console.warn("[verifyFirebaseUserWithAdmin] verifyIdToken failed:", error instanceof Error ? error.message : error);
     return null;
   }
 }
@@ -740,7 +854,10 @@ function validateSettings(input: unknown): AppSettings | null {
     typeof source.brandDarkColor !== "string" ||
     !source.brandDarkColor.match(/^#[0-9A-Fa-f]{6}$/) ||
     (source.customFooter !== undefined && (typeof source.customFooter !== "string" || source.customFooter.length > 500)) ||
-    (source.helpContactEmail !== undefined && (typeof source.helpContactEmail !== "string" || source.helpContactEmail.length > 254))
+    (source.helpContactEmail !== undefined && (typeof source.helpContactEmail !== "string" || source.helpContactEmail.length > 254)) ||
+    (source.typographyFamily !== undefined && (typeof source.typographyFamily !== "string" || !TYPOGRAPHY_FAMILY_VALUES.includes(source.typographyFamily as TypographyFamily))) ||
+    (source.showRefreshPermissions !== undefined && typeof source.showRefreshPermissions !== "boolean") ||
+    (source.showUserPermissionDetails !== undefined && typeof source.showUserPermissionDetails !== "boolean")
   ) {
     return null;
   }
@@ -760,6 +877,11 @@ function validateSettings(input: unknown): AppSettings | null {
     brandDarkColor: source.brandDarkColor,
     customFooter: typeof source.customFooter === "string" ? source.customFooter.trim() : undefined,
     helpContactEmail: typeof source.helpContactEmail === "string" ? source.helpContactEmail.trim() : undefined,
+    typographyFamily: typeof source.typographyFamily === "string" && TYPOGRAPHY_FAMILY_VALUES.includes(source.typographyFamily as TypographyFamily)
+      ? (source.typographyFamily as TypographyFamily)
+      : "system",
+    showRefreshPermissions: typeof source.showRefreshPermissions === "boolean" ? source.showRefreshPermissions : true,
+    showUserPermissionDetails: typeof source.showUserPermissionDetails === "boolean" ? source.showUserPermissionDetails : true,
   };
 }
 
@@ -779,6 +901,9 @@ function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?
     brandDarkColor: { stringValue: settings.brandDarkColor },
     ...(settings.customFooter !== undefined && { customFooter: { stringValue: settings.customFooter } }),
     ...(settings.helpContactEmail !== undefined && { helpContactEmail: { stringValue: settings.helpContactEmail } }),
+    typographyFamily: { stringValue: settings.typographyFamily },
+    showRefreshPermissions: { booleanValue: settings.showRefreshPermissions },
+    showUserPermissionDetails: { booleanValue: settings.showUserPermissionDetails },
   };
 }
 
@@ -801,6 +926,11 @@ function fromFirestoreFields(
     brandDarkColor: fields.brandDarkColor?.stringValue,
     customFooter: fields.customFooter?.stringValue,
     helpContactEmail: fields.helpContactEmail?.stringValue,
+    typographyFamily: TYPOGRAPHY_FAMILY_VALUES.includes(fields.typographyFamily?.stringValue as TypographyFamily)
+      ? (fields.typographyFamily?.stringValue as TypographyFamily)
+      : undefined,
+    showRefreshPermissions: fields.showRefreshPermissions?.booleanValue,
+    showUserPermissionDetails: fields.showUserPermissionDetails?.booleanValue,
   };
 }
 
@@ -891,10 +1021,30 @@ async function identityToolkitCall(path: string, body: Record<string, unknown>):
   return data as Record<string, unknown>;
 }
 
-async function firestoreCall(path: string, options: { method?: string; body?: unknown } = {}): Promise<Record<string, unknown>> {
+/**
+ * Calls the Firestore REST API with the server's service-account credentials.
+ *
+ * IMPORTANT: Firestore's `documents.patch` REST endpoint REPLACES the entire
+ * document when no `updateMask` is provided — fields not present in the body
+ * are deleted. For partial updates (e.g. saving settings without clobbering
+ * the elevated-access password), pass `updateMaskFieldPaths` with the exact
+ * set of field names to update.
+ */
+async function firestoreCall(
+  path: string,
+  options: { method?: string; body?: unknown; updateMaskFieldPaths?: string[] } = {},
+): Promise<Record<string, unknown>> {
   const token = await getGoogleAccessToken("https://www.googleapis.com/auth/datastore");
   const projectId = getFirebaseProjectId();
-  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`, {
+  const url = new URL(
+    `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`,
+  );
+  if (options.updateMaskFieldPaths && options.updateMaskFieldPaths.length > 0) {
+    for (const fieldPath of options.updateMaskFieldPaths) {
+      url.searchParams.append("updateMask.fieldPaths", fieldPath);
+    }
+  }
+  const response = await fetch(url.toString(), {
     method: options.method || "GET",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -917,9 +1067,14 @@ async function fetchFirestoreSettings(): Promise<Partial<AppSettings>> {
 }
 
 async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
+  const fields = toFirestoreFields(settings);
+  // Partial update with updateMask so unrelated fields (e.g. elevatedPasswordHash,
+  // elevatedPasswordNeedsChange) are preserved. Without the mask, REST PATCH
+  // replaces the entire document and wipes those fields.
   await firestoreCall("settings/global", {
     method: "PATCH",
-    body: { fields: toFirestoreFields(settings) },
+    body: { fields },
+    updateMaskFieldPaths: Object.keys(fields),
   });
 }
 
@@ -1062,6 +1217,8 @@ async function getElevatedAccessConfig(): Promise<{ passwordHash: string; needsC
 }
 
 async function saveElevatedAccessConfig(config: { passwordHash: string; needsChange: boolean }): Promise<void> {
+  // Partial update so saving the elevated password does not wipe the rest of
+  // the settings doc (suiteName, activeProvider, branding, etc.).
   await firestoreCall("settings/global", {
     method: "PATCH",
     body: {
@@ -1070,11 +1227,12 @@ async function saveElevatedAccessConfig(config: { passwordHash: string; needsCha
         elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
       },
     },
+    updateMaskFieldPaths: ["elevatedPasswordHash", "elevatedPasswordNeedsChange"],
   });
 }
 
 async function resolveEffectiveRole(verifiedUser: VerifiedUser): Promise<AppRole> {
-  if ((verifiedUser.email || "").trim().toLowerCase() === DEFAULT_BOOTSTRAP_OWNER_EMAIL) {
+  if (isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
     return "owner";
   }
   const mirror = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
@@ -1171,17 +1329,21 @@ app.use(
 
       const isAllowedByConfig = allowedOrigins.includes(origin);
       const isAllowedDevOrigin = !isProduction && devOrigins.includes(origin);
+      const isAllowedVercelHost = isVercelSameHostOrigin(origin);
 
-      if (isAllowedByConfig || isAllowedDevOrigin) {
+      if (isAllowedByConfig || isAllowedDevOrigin || isAllowedVercelHost) {
         callback(null, true);
         return;
       }
 
+      console.warn(`[cors] origin denied: ${origin}. Configured allowlist: ${JSON.stringify(allowedOrigins)}`);
       callback(new Error("CORS origin denied"));
     },
   }),
 );
-app.use(express.json({ limit: "16kb" }));
+// Settings payloads may include base64 logo data URLs up to ~150KB; keep room
+// for JSON overhead and other fields.
+app.use(express.json({ limit: "512kb" }));
 app.set("trust proxy", getTrustProxySetting());
 
 if (!hasUpstash) {
@@ -1233,10 +1395,56 @@ app.get("/api/debug/env", (req, res) => {
     hasGoogleCloudProject: Boolean(process.env.GOOGLE_CLOUD_PROJECT),
     hasViteFirebaseApiKey: Boolean(process.env.VITE_FIREBASE_API_KEY),
     hasOwnerEmails: Boolean(process.env.OWNER_EMAILS),
+    configuredOwnerEmails: configuredOwnerEmails(),
     resolvedProjectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID || null,
     nodeEnv: process.env.NODE_ENV || null,
     isVercel: Boolean(process.env.VERCEL),
   });
+});
+
+/**
+ * Returns the resolved identity as the API sees it, including JWT claims,
+ * Firestore mirror fields, and the merged permissions used by admin routes.
+ * Safe to leave in production: requires a valid Bearer token and only returns
+ * the caller's own information.
+ */
+app.get("/api/debug/whoami", async (req, res) => {
+  try {
+    const token = getBearerToken(req.headers.authorization);
+    if (!token) return res.status(401).json({ error: "Authentication required" });
+    const verifiedUser = await verifyFirebaseUser(token);
+    if (!verifiedUser) {
+      return res.status(401).json({
+        error: "Invalid or expired auth token",
+        adminSdkInitialized: adminAuth !== null,
+      });
+    }
+    const mirror = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
+    const merged = await mergeFirestoreMirrorIntoClaims(verifiedUser);
+    const tokenRole = normalizeRoleFromClaims(verifiedUser.claims);
+    const effectiveRole = normalizeRoleFromClaims(merged.claims);
+    const mergedPerms = sanitizePermissionSet(merged.claims.permissions, effectiveRole);
+    const emailIsBootstrap = isEmailEligibleForOwnerBootstrap(verifiedUser.email);
+    res.json({
+      uid: verifiedUser.uid,
+      email: verifiedUser.email,
+      tokenRole,
+      mirrorRole: mirror.role,
+      effectiveRole,
+      mergedPermissions: mergedPerms,
+      tokenClaims: verifiedUser.claims,
+      mirrorPermissions: mirror.permissions,
+      emailIsBootstrapOwner: emailIsBootstrap,
+      configuredOwnerEmails: configuredOwnerEmails(),
+      adminSdkInitialized: adminAuth !== null,
+      adminSdkInitError,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Unable to resolve identity",
+      adminSdkInitialized: adminAuth !== null,
+    });
+  }
 });
 
 app.post("/api/auth/reconcile-role", async (req, res) => {
@@ -1250,23 +1458,52 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
     const currentRole = normalizeRoleFromClaims(verifiedUser.claims);
     const mirrored = await getUserMirrorRoleAndPermissions(verifiedUser.uid);
 
-    if (currentRole !== "owner" && isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
-      if (!adminAuth) {
-        console.warn(`[auth/reconcile-role] Admin SDK unavailable; cannot set claims for uid=${verifiedUser.uid}. Fix FIREBASE_SERVICE_ACCOUNT_JSON in Vercel.`);
-        await pause(120);
-        return res.json({ role: "owner", reconciled: false, warning: "Admin SDK unavailable; token claims not updated. Check FIREBASE_SERVICE_ACCOUNT_JSON in Vercel environment variables." });
+    if (isEmailEligibleForOwnerBootstrap(verifiedUser.email)) {
+      // Even when Firebase Admin SDK is unreachable (no setCustomUserClaims),
+      // write a proper owner mirror so admin HTTP routes that merge the mirror
+      // grant access. This repairs malformed docs left behind by failed
+      // bootstrap runs (e.g. documents containing only { mirror: true }).
+      try {
+        await firestoreCall(`users/${verifiedUser.uid}`, {
+          method: "PATCH",
+          body: {
+            fields: toFirestoreUserFields({
+              email: verifiedUser.email || "",
+              displayName: "",
+              role: "owner",
+              permissions: defaultPermissionsForRole("owner"),
+              status: "active",
+              actorUid: verifiedUser.uid,
+            }),
+          },
+        });
+      } catch (mirrorError) {
+        console.error(`[auth/reconcile-role] Firestore mirror repair failed for uid=${verifiedUser.uid}:`, mirrorError);
       }
-      await applyOwnerRoleToUid({
-        uid: verifiedUser.uid,
-        email: verifiedUser.email || "",
-        displayName: "",
-        actorUid: verifiedUser.uid,
-        actorEmail: verifiedUser.email || "",
-        action: "reconcile-role-refresh",
-      });
-      await pause(120);
-      console.log(`[auth/reconcile-role] promoted to owner uid=${verifiedUser.uid}`);
-      return res.json({ role: "owner", reconciled: true });
+
+      if (currentRole !== "owner") {
+        if (!adminAuth) {
+          console.warn(`[auth/reconcile-role] Admin SDK unavailable; cannot set claims for uid=${verifiedUser.uid}. Fix FIREBASE_SERVICE_ACCOUNT_JSON in Vercel.`);
+          await pause(120);
+          return res.json({
+            role: "owner",
+            reconciled: false,
+            warning:
+              "Admin SDK unavailable; custom claims were not written, but the Firestore user mirror was repaired to owner. The HTTP admin API honors the mirror; sign out/in later to refresh the ID token.",
+          });
+        }
+        await applyOwnerRoleToUid({
+          uid: verifiedUser.uid,
+          email: verifiedUser.email || "",
+          displayName: "",
+          actorUid: verifiedUser.uid,
+          actorEmail: verifiedUser.email || "",
+          action: "reconcile-role-refresh",
+        });
+        await pause(120);
+        console.log(`[auth/reconcile-role] promoted to owner uid=${verifiedUser.uid}`);
+        return res.json({ role: "owner", reconciled: true });
+      }
     }
 
     if (mirrored.role && mirrored.role !== currentRole) {
@@ -1393,7 +1630,7 @@ app.post("/api/ai/generate", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired auth token" });
     }
 
-    const adminGate = requireInternalAdmin(verifiedUser);
+    const adminGate = await requireInternalAdmin(verifiedUser);
     if (adminGate.ok === false) {
       return res.status(adminGate.status).json({ error: adminGate.error });
     }
@@ -1556,7 +1793,7 @@ app.post("/api/admin/settings", async (req, res) => {
     if (!verifiedUser) {
       return res.status(401).json({ error: "Invalid or expired auth token" });
     }
-    const adminGate = requireInternalAdmin(verifiedUser);
+    const adminGate = await requireInternalAdmin(verifiedUser);
     if (adminGate.ok === false) {
       return res.status(adminGate.status).json({ error: adminGate.error });
     }
@@ -1629,7 +1866,7 @@ app.post("/api/admin/operations/run", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired auth token" });
     }
 
-    const adminGate = requireInternalAdmin(verifiedUser);
+    const adminGate = await requireInternalAdmin(verifiedUser);
     if (adminGate.ok === false) {
       return res.status(adminGate.status).json({ error: adminGate.error });
     }
@@ -1691,9 +1928,10 @@ app.get("/api/admin/users/list", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
+    const actor = await mergeFirestoreMirrorIntoClaims(verifiedUser);
 
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
+    const callerRole = normalizeRoleFromClaims(actor.claims);
+    const callerPermissions = sanitizePermissionSet(actor.claims.permissions, callerRole);
     if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
 
     const result = await firestoreCall("users?pageSize=500");
@@ -1786,8 +2024,9 @@ app.get("/api/admin/users/audit", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
+    const actor = await mergeFirestoreMirrorIntoClaims(verifiedUser);
+    const callerRole = normalizeRoleFromClaims(actor.claims);
+    const callerPermissions = sanitizePermissionSet(actor.claims.permissions, callerRole);
     if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
     const result = await firestoreCall("adminAudit?pageSize=100");
     const documents = (result.documents as Array<{ name?: string; fields?: Record<string, Record<string, unknown>> }> | undefined) || [];
@@ -1804,8 +2043,9 @@ app.post("/api/admin/users/set-role", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
+    const actor = await mergeFirestoreMirrorIntoClaims(verifiedUser);
+    const callerRole = normalizeRoleFromClaims(actor.claims);
+    const callerPermissions = sanitizePermissionSet(actor.claims.permissions, callerRole);
     if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
 
     const targetUid = typeof req.body?.uid === "string" ? req.body.uid : "";
@@ -1871,8 +2111,9 @@ app.post("/api/admin/users/:action(enable|disable)", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
+    const actor = await mergeFirestoreMirrorIntoClaims(verifiedUser);
+    const callerRole = normalizeRoleFromClaims(actor.claims);
+    const callerPermissions = sanitizePermissionSet(actor.claims.permissions, callerRole);
     if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
     const targetUid = typeof req.body?.uid === "string" ? req.body.uid : "";
     if (!targetUid) return res.status(400).json({ error: "uid is required" });
@@ -1914,8 +2155,9 @@ app.post("/api/admin/users/set-permissions", async (req, res) => {
     if (!token) return res.status(401).json({ error: "Authentication required" });
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) return res.status(401).json({ error: "Invalid or expired auth token" });
-    const callerRole = normalizeRoleFromClaims(verifiedUser.claims);
-    const callerPermissions = sanitizePermissionSet(verifiedUser.claims.permissions, callerRole);
+    const actor = await mergeFirestoreMirrorIntoClaims(verifiedUser);
+    const callerRole = normalizeRoleFromClaims(actor.claims);
+    const callerPermissions = sanitizePermissionSet(actor.claims.permissions, callerRole);
     if (!callerPermissions.canManageRoles) return res.status(403).json({ error: "Manage roles permission required" });
 
     const targetUid = typeof req.body?.uid === "string" ? req.body.uid : "";
@@ -1952,6 +2194,26 @@ app.post("/api/admin/users/set-permissions", async (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to update permissions" });
   }
+});
+
+// Global error handler: any synchronous throw or unhandled rejection passed to
+// next() returns a JSON 500 with enough detail to diagnose, instead of letting
+// the Vercel Lambda surface an opaque FUNCTION_INVOCATION_FAILED.
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const name = err instanceof Error ? err.name : "UnknownError";
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack : undefined;
+  console.error("[express] unhandled error", { name, message, stack });
+  if (res.headersSent) {
+    return;
+  }
+  res.status(500).json({
+    error: message,
+    errorName: name,
+    stack: process.env.NODE_ENV === "production" ? undefined : stack,
+    adminSdkInitialized: adminAuth !== null,
+    adminSdkInitError,
+  });
 });
 
 export default app;
