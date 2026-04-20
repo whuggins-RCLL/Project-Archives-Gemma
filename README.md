@@ -463,6 +463,21 @@ To reproduce the full failure scenario this project hit in production (useful fo
 6. Reload the page. Access Management lists users.
 7. Sign out / sign in to pick up the new custom claim and update the Token label.
 
+### Firestore REST PATCH replaces the whole document by default
+
+When writing Firestore documents from the server via the REST API
+(`firestore.googleapis.com/v1/.../documents:patch`), the default behavior is
+to **replace the entire document** — fields not present in the request body
+are deleted. This is different from the client SDK's `setDoc(..., { merge: true })`.
+
+Consequences seen in this project:
+- Saving Global Settings wiped `elevatedPasswordHash` and `elevatedPasswordNeedsChange`, so the next elevated login forced a password change.
+- Changing the elevated password wiped the real settings (`aiEnabled`, `activeProvider`, `suiteName`, ...), showing an empty settings form on the next load.
+
+Fix: always pass an `updateMask` query parameter when PATCH-ing to a document
+that shares fields with other writers. The shared `firestoreCall` helper in
+`server.ts` accepts `updateMaskFieldPaths: string[]` for exactly this reason.
+
 ### Summary of diagnostic endpoints and variables
 
 | Endpoint / env | What it tells you |
