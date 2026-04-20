@@ -452,11 +452,45 @@ function sanitizeServerError(error: unknown): string {
 }
 
 function getAllowedCorsOrigins(): string[] {
+  const origins = new Set<string>();
+
   const configuredOrigins = process.env.CORS_ALLOWED_ORIGINS || "";
-  return configuredOrigins
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  for (const origin of configuredOrigins.split(",")) {
+    const trimmed = origin.trim();
+    if (trimmed) origins.add(trimmed);
+  }
+
+  // Vercel exposes the current deployment's host. Same-origin fetches still
+  // send an Origin header in modern browsers, so without this the app would
+  // reject its own requests on non-custom-domain deployments.
+  if (process.env.VERCEL_URL) {
+    origins.add(`https://${process.env.VERCEL_URL}`);
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    origins.add(`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`);
+  }
+  if (process.env.VERCEL_BRANCH_URL) {
+    origins.add(`https://${process.env.VERCEL_BRANCH_URL}`);
+  }
+
+  return Array.from(origins);
+}
+
+/**
+ * Vercel preview and production deployments expose themselves on many hostnames
+ * (e.g. <project>-<hash>.vercel.app, <project>-git-<branch>.vercel.app, and
+ * custom domains). Same-origin fetches from the SPA still include an Origin
+ * header, so CORS must accept any *.vercel.app origin plus the configured
+ * production/custom hostname for this deployment to work out-of-the-box.
+ */
+function isVercelSameHostOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "https:") return false;
+    return url.hostname.endsWith(".vercel.app");
+  } catch {
+    return false;
+  }
 }
 
 function getTrustProxySetting(): boolean | number {
@@ -1225,12 +1259,14 @@ app.use(
 
       const isAllowedByConfig = allowedOrigins.includes(origin);
       const isAllowedDevOrigin = !isProduction && devOrigins.includes(origin);
+      const isAllowedVercelHost = isVercelSameHostOrigin(origin);
 
-      if (isAllowedByConfig || isAllowedDevOrigin) {
+      if (isAllowedByConfig || isAllowedDevOrigin || isAllowedVercelHost) {
         callback(null, true);
         return;
       }
 
+      console.warn(`[cors] origin denied: ${origin}. Configured allowlist: ${JSON.stringify(allowedOrigins)}`);
       callback(new Error("CORS origin denied"));
     },
   }),
