@@ -979,10 +979,30 @@ async function identityToolkitCall(path: string, body: Record<string, unknown>):
   return data as Record<string, unknown>;
 }
 
-async function firestoreCall(path: string, options: { method?: string; body?: unknown } = {}): Promise<Record<string, unknown>> {
+/**
+ * Calls the Firestore REST API with the server's service-account credentials.
+ *
+ * IMPORTANT: Firestore's `documents.patch` REST endpoint REPLACES the entire
+ * document when no `updateMask` is provided — fields not present in the body
+ * are deleted. For partial updates (e.g. saving settings without clobbering
+ * the elevated-access password), pass `updateMaskFieldPaths` with the exact
+ * set of field names to update.
+ */
+async function firestoreCall(
+  path: string,
+  options: { method?: string; body?: unknown; updateMaskFieldPaths?: string[] } = {},
+): Promise<Record<string, unknown>> {
   const token = await getGoogleAccessToken("https://www.googleapis.com/auth/datastore");
   const projectId = getFirebaseProjectId();
-  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`, {
+  const url = new URL(
+    `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`,
+  );
+  if (options.updateMaskFieldPaths && options.updateMaskFieldPaths.length > 0) {
+    for (const fieldPath of options.updateMaskFieldPaths) {
+      url.searchParams.append("updateMask.fieldPaths", fieldPath);
+    }
+  }
+  const response = await fetch(url.toString(), {
     method: options.method || "GET",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1005,9 +1025,14 @@ async function fetchFirestoreSettings(): Promise<Partial<AppSettings>> {
 }
 
 async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
+  const fields = toFirestoreFields(settings);
+  // Partial update with updateMask so unrelated fields (e.g. elevatedPasswordHash,
+  // elevatedPasswordNeedsChange) are preserved. Without the mask, REST PATCH
+  // replaces the entire document and wipes those fields.
   await firestoreCall("settings/global", {
     method: "PATCH",
-    body: { fields: toFirestoreFields(settings) },
+    body: { fields },
+    updateMaskFieldPaths: Object.keys(fields),
   });
 }
 
@@ -1150,6 +1175,8 @@ async function getElevatedAccessConfig(): Promise<{ passwordHash: string; needsC
 }
 
 async function saveElevatedAccessConfig(config: { passwordHash: string; needsChange: boolean }): Promise<void> {
+  // Partial update so saving the elevated password does not wipe the rest of
+  // the settings doc (suiteName, activeProvider, branding, etc.).
   await firestoreCall("settings/global", {
     method: "PATCH",
     body: {
@@ -1158,6 +1185,7 @@ async function saveElevatedAccessConfig(config: { passwordHash: string; needsCha
         elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
       },
     },
+    updateMaskFieldPaths: ["elevatedPasswordHash", "elevatedPasswordNeedsChange"],
   });
 }
 
