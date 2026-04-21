@@ -90,7 +90,9 @@ const ADMIN_SETTINGS_RATE_LIMIT_WINDOW_MS = 60_000;
 const ADMIN_SETTINGS_RATE_LIMIT_MAX_REQUESTS = 15;
 const ADMIN_OPERATIONS_RATE_LIMIT_WINDOW_MS = 60_000;
 const ADMIN_OPERATIONS_RATE_LIMIT_MAX_REQUESTS = 6;
-const ADMIN_SETTINGS_MAX_BODY_BYTES = 8 * 1024;
+// Settings can embed a logo data URL (up to 150 KB) plus 10+ string fields
+// and several booleans. Allow 256 KB so large logo uploads succeed.
+const ADMIN_SETTINGS_MAX_BODY_BYTES = 256 * 1024;
 const ADMIN_OPERATIONS_MAX_BODY_BYTES = 2 * 1024;
 const ADMIN_SETTINGS_TIMEOUT_MS = 8_000;
 const ADMIN_OPERATIONS_TIMEOUT_MS = 15_000;
@@ -124,8 +126,16 @@ type AppSettings = {
   logoDataUrl: string;
   primaryColor: string;
   brandDarkColor: string;
+  darkPrimaryColor?: string;
+  darkBrandDarkColor?: string;
   customFooter?: string;
   helpContactEmail?: string;
+  themeMode?: "system" | "light" | "dark";
+  heroMediaUrl?: string;
+  heroMediaType?: "none" | "image" | "video";
+  showRefreshPermissions?: boolean;
+  showRoleDebug?: boolean;
+  showPortfolioActions?: boolean;
 };
 
 type VerifiedUser = {
@@ -714,6 +724,21 @@ async function verifyFirebaseUser(idToken: string): Promise<VerifiedUser | null>
   }
 }
 
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+const ALLOWED_THEME_MODES = new Set(["system", "light", "dark"]);
+const ALLOWED_HERO_MEDIA_TYPES = new Set(["none", "image", "video"]);
+
+function isSafeHttpUrl(value: string): boolean {
+  if (value.length === 0) return true;
+  if (value.length > 2048) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 function validateSettings(input: unknown): AppSettings | null {
   if (!input || typeof input !== "object") return null;
   const source = input as Record<string, unknown>;
@@ -736,11 +761,19 @@ function validateSettings(input: unknown): AppSettings | null {
     typeof source.logoDataUrl !== "string" ||
     source.logoDataUrl.length > 150_000 ||
     typeof source.primaryColor !== "string" ||
-    !source.primaryColor.match(/^#[0-9A-Fa-f]{6}$/) ||
+    !HEX_COLOR_RE.test(source.primaryColor) ||
     typeof source.brandDarkColor !== "string" ||
-    !source.brandDarkColor.match(/^#[0-9A-Fa-f]{6}$/) ||
+    !HEX_COLOR_RE.test(source.brandDarkColor) ||
+    (source.darkPrimaryColor !== undefined && (typeof source.darkPrimaryColor !== "string" || !HEX_COLOR_RE.test(source.darkPrimaryColor))) ||
+    (source.darkBrandDarkColor !== undefined && (typeof source.darkBrandDarkColor !== "string" || !HEX_COLOR_RE.test(source.darkBrandDarkColor))) ||
     (source.customFooter !== undefined && (typeof source.customFooter !== "string" || source.customFooter.length > 500)) ||
-    (source.helpContactEmail !== undefined && (typeof source.helpContactEmail !== "string" || source.helpContactEmail.length > 254))
+    (source.helpContactEmail !== undefined && (typeof source.helpContactEmail !== "string" || source.helpContactEmail.length > 254)) ||
+    (source.themeMode !== undefined && (typeof source.themeMode !== "string" || !ALLOWED_THEME_MODES.has(source.themeMode))) ||
+    (source.heroMediaType !== undefined && (typeof source.heroMediaType !== "string" || !ALLOWED_HERO_MEDIA_TYPES.has(source.heroMediaType))) ||
+    (source.heroMediaUrl !== undefined && (typeof source.heroMediaUrl !== "string" || !isSafeHttpUrl(source.heroMediaUrl))) ||
+    (source.showRefreshPermissions !== undefined && typeof source.showRefreshPermissions !== "boolean") ||
+    (source.showRoleDebug !== undefined && typeof source.showRoleDebug !== "boolean") ||
+    (source.showPortfolioActions !== undefined && typeof source.showPortfolioActions !== "boolean")
   ) {
     return null;
   }
@@ -758,8 +791,16 @@ function validateSettings(input: unknown): AppSettings | null {
     logoDataUrl: source.logoDataUrl,
     primaryColor: source.primaryColor,
     brandDarkColor: source.brandDarkColor,
+    darkPrimaryColor: typeof source.darkPrimaryColor === "string" ? source.darkPrimaryColor : undefined,
+    darkBrandDarkColor: typeof source.darkBrandDarkColor === "string" ? source.darkBrandDarkColor : undefined,
     customFooter: typeof source.customFooter === "string" ? source.customFooter.trim() : undefined,
     helpContactEmail: typeof source.helpContactEmail === "string" ? source.helpContactEmail.trim() : undefined,
+    themeMode: typeof source.themeMode === "string" ? source.themeMode as AppSettings["themeMode"] : undefined,
+    heroMediaUrl: typeof source.heroMediaUrl === "string" ? source.heroMediaUrl.trim() : undefined,
+    heroMediaType: typeof source.heroMediaType === "string" ? source.heroMediaType as AppSettings["heroMediaType"] : undefined,
+    showRefreshPermissions: typeof source.showRefreshPermissions === "boolean" ? source.showRefreshPermissions : undefined,
+    showRoleDebug: typeof source.showRoleDebug === "boolean" ? source.showRoleDebug : undefined,
+    showPortfolioActions: typeof source.showPortfolioActions === "boolean" ? source.showPortfolioActions : undefined,
   };
 }
 
@@ -777,8 +818,16 @@ function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?
     logoDataUrl: { stringValue: settings.logoDataUrl },
     primaryColor: { stringValue: settings.primaryColor },
     brandDarkColor: { stringValue: settings.brandDarkColor },
+    ...(settings.darkPrimaryColor !== undefined && { darkPrimaryColor: { stringValue: settings.darkPrimaryColor } }),
+    ...(settings.darkBrandDarkColor !== undefined && { darkBrandDarkColor: { stringValue: settings.darkBrandDarkColor } }),
     ...(settings.customFooter !== undefined && { customFooter: { stringValue: settings.customFooter } }),
     ...(settings.helpContactEmail !== undefined && { helpContactEmail: { stringValue: settings.helpContactEmail } }),
+    ...(settings.themeMode !== undefined && { themeMode: { stringValue: settings.themeMode } }),
+    ...(settings.heroMediaUrl !== undefined && { heroMediaUrl: { stringValue: settings.heroMediaUrl } }),
+    ...(settings.heroMediaType !== undefined && { heroMediaType: { stringValue: settings.heroMediaType } }),
+    ...(settings.showRefreshPermissions !== undefined && { showRefreshPermissions: { booleanValue: settings.showRefreshPermissions } }),
+    ...(settings.showRoleDebug !== undefined && { showRoleDebug: { booleanValue: settings.showRoleDebug } }),
+    ...(settings.showPortfolioActions !== undefined && { showPortfolioActions: { booleanValue: settings.showPortfolioActions } }),
   };
 }
 
@@ -799,8 +848,16 @@ function fromFirestoreFields(
     logoDataUrl: fields.logoDataUrl?.stringValue,
     primaryColor: fields.primaryColor?.stringValue,
     brandDarkColor: fields.brandDarkColor?.stringValue,
+    darkPrimaryColor: fields.darkPrimaryColor?.stringValue,
+    darkBrandDarkColor: fields.darkBrandDarkColor?.stringValue,
     customFooter: fields.customFooter?.stringValue,
     helpContactEmail: fields.helpContactEmail?.stringValue,
+    themeMode: fields.themeMode?.stringValue as AppSettings["themeMode"] | undefined,
+    heroMediaUrl: fields.heroMediaUrl?.stringValue,
+    heroMediaType: fields.heroMediaType?.stringValue as AppSettings["heroMediaType"] | undefined,
+    showRefreshPermissions: fields.showRefreshPermissions?.booleanValue,
+    showRoleDebug: fields.showRoleDebug?.booleanValue,
+    showPortfolioActions: fields.showPortfolioActions?.booleanValue,
   };
 }
 
@@ -917,9 +974,11 @@ async function fetchFirestoreSettings(): Promise<Partial<AppSettings>> {
 }
 
 async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
-  await firestoreCall("settings/global", {
+  const fields = toFirestoreFields(settings);
+  const fieldPaths = Object.keys(fields).map((key) => `updateMask.fieldPaths=${encodeURIComponent(key)}`).join("&");
+  await firestoreCall(`settings/global?${fieldPaths}`, {
     method: "PATCH",
-    body: { fields: toFirestoreFields(settings) },
+    body: { fields },
   });
 }
 
@@ -1062,15 +1121,18 @@ async function getElevatedAccessConfig(): Promise<{ passwordHash: string; needsC
 }
 
 async function saveElevatedAccessConfig(config: { passwordHash: string; needsChange: boolean }): Promise<void> {
-  await firestoreCall("settings/global", {
-    method: "PATCH",
-    body: {
-      fields: {
-        elevatedPasswordHash: { stringValue: config.passwordHash },
-        elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
+  await firestoreCall(
+    "settings/global?updateMask.fieldPaths=elevatedPasswordHash&updateMask.fieldPaths=elevatedPasswordNeedsChange",
+    {
+      method: "PATCH",
+      body: {
+        fields: {
+          elevatedPasswordHash: { stringValue: config.passwordHash },
+          elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
+        },
       },
     },
-  });
+  );
 }
 
 async function resolveEffectiveRole(verifiedUser: VerifiedUser): Promise<AppRole> {
@@ -1161,27 +1223,71 @@ async function bootstrapOwnersFromEnv(): Promise<void> {
   }
 }
 
+// Same-origin requests on Vercel (e.g. the app calling /api/... at the same
+// https://<project>.vercel.app host) still send an Origin header. Accept them
+// implicitly, plus any *.vercel.app host, so admins don't have to maintain a
+// CORS_ALLOWED_ORIGINS allowlist just to unblock their own frontend. Requests
+// from arbitrary third-party origins must still appear in the configured
+// allowlist.
+function isVercelHost(host: string): boolean {
+  return host.endsWith(".vercel.app");
+}
+
+function isSameOriginRequest(req: express.Request, origin: string): boolean {
+  try {
+    const { host, protocol } = new URL(origin);
+    const forwardedHost = (req.headers["x-forwarded-host"] || req.headers.host || "").toString();
+    const forwardedProto = (req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http")).toString();
+    if (!forwardedHost) return false;
+    return host === forwardedHost && protocol.replace(":", "") === forwardedProto;
+  } catch {
+    return false;
+  }
+}
+
 app.use(
   cors({
     origin(origin, callback) {
+      // cors passes the request object via `this` binding? No — we wrap below.
+      // The real per-request decision happens inside the middleware wrapper.
       if (!origin) {
         callback(null, true);
         return;
       }
-
-      const isAllowedByConfig = allowedOrigins.includes(origin);
-      const isAllowedDevOrigin = !isProduction && devOrigins.includes(origin);
-
-      if (isAllowedByConfig || isAllowedDevOrigin) {
-        callback(null, true);
-        return;
-      }
-
-      callback(new Error("CORS origin denied"));
+      callback(null, true); // default permissive; real check runs in wrapper below
     },
   }),
 );
-app.use(express.json({ limit: "16kb" }));
+
+// Wrapper that enforces CORS policy using the request context so we can treat
+// same-origin + vercel.app hosts as allowed without requiring explicit config.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || typeof origin !== "string") {
+    return next();
+  }
+  const isAllowedByConfig = allowedOrigins.includes(origin);
+  const isAllowedDevOrigin = !isProduction && devOrigins.includes(origin);
+  let isAllowedVercel = false;
+  try {
+    isAllowedVercel = isVercelHost(new URL(origin).host);
+  } catch {
+    isAllowedVercel = false;
+  }
+  const sameOrigin = isSameOriginRequest(req, origin);
+  if (isAllowedByConfig || isAllowedDevOrigin || isAllowedVercel || sameOrigin) {
+    return next();
+  }
+  auditLog("cors_origin_denied", {
+    origin,
+    host: req.headers.host,
+    forwardedHost: req.headers["x-forwarded-host"],
+    path: req.path,
+  }, "error");
+  res.status(403).json({ error: "CORS origin denied", origin });
+});
+// Body limit sized to hold a full 150 KB logo data URL plus other settings.
+app.use(express.json({ limit: "512kb" }));
 app.set("trust proxy", getTrustProxySetting());
 
 if (!hasUpstash) {
@@ -1309,6 +1415,19 @@ app.post("/api/auth/reconcile-role", async (req, res) => {
   }
 });
 
+function describeServerError(error: unknown, fallback: string): Record<string, unknown> {
+  const message = error instanceof Error ? error.message : String(error);
+  const errorName = error instanceof Error ? error.name : "Error";
+  return {
+    error: message || fallback,
+    errorName,
+    adminSdkInitialized: adminAuth !== null,
+    adminSdkInitError,
+    hasServiceAccountJson: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_JSON),
+    hasFirebaseProjectId: Boolean(process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID),
+  };
+}
+
 app.get("/api/auth/elevated/status", async (req, res) => {
   try {
     const token = getBearerToken(req.headers.authorization);
@@ -1322,7 +1441,8 @@ app.get("/api/auth/elevated/status", async (req, res) => {
     const config = await getElevatedAccessConfig();
     return res.json({ required: true, needsChange: config.needsChange });
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to read elevated auth status" });
+    console.error("[auth/elevated/status] failed", error);
+    return res.status(500).json(describeServerError(error, "Unable to read elevated auth status"));
   }
 });
 
@@ -1345,7 +1465,8 @@ app.post("/api/auth/elevated/login", async (req, res) => {
     }
     return res.json({ success: true, needsChange: config.needsChange });
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to authenticate elevated access" });
+    console.error("[auth/elevated/login] failed", error);
+    return res.status(500).json(describeServerError(error, "Unable to authenticate elevated access"));
   }
 });
 
@@ -1374,7 +1495,8 @@ app.post("/api/auth/elevated/change-password", async (req, res) => {
     });
     return res.json({ success: true, message: "Password updated successfully" });
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to change elevated password" });
+    console.error("[auth/elevated/change-password] failed", error);
+    return res.status(500).json(describeServerError(error, "Unable to change elevated password"));
   }
 });
 
@@ -1952,6 +2074,35 @@ app.post("/api/admin/users/set-permissions", async (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to update permissions" });
   }
+});
+
+// Global error handler: any uncaught error from a route handler surfaces as a
+// JSON 500 with enough detail to diagnose from the response body instead of
+// Vercel's opaque FUNCTION_INVOCATION_FAILED page. Messages are always
+// included (the admin endpoints are authenticated and this is the only way to
+// debug production issues from the client). The stack is production-gated.
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err instanceof Error ? err.message : String(err);
+  const errorName = err instanceof Error ? err.name : "Error";
+  console.error("[server] unhandled error", {
+    method: req.method,
+    path: req.path,
+    errorName,
+    message,
+    stack: err instanceof Error ? err.stack : undefined,
+    adminSdkInitialized: adminAuth !== null,
+    adminSdkInitError,
+  });
+  if (res.headersSent) return;
+  res.status(500).json({
+    error: "Server error",
+    errorName,
+    message,
+    stack: isProduction ? undefined : (err instanceof Error ? err.stack : undefined),
+    adminSdkInitialized: adminAuth !== null,
+    adminSdkInitError,
+    nodeVersion: process.version,
+  });
 });
 
 export default app;

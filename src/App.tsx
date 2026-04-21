@@ -19,17 +19,9 @@ import LoginView from './views/LoginView';
 import SettingsView from './views/SettingsView';
 import AdminUsersView from './views/AdminUsersView';
 import { api } from './lib/api';
-import {
-  AppRole,
-  RolePreviewMode,
-  effectiveCapabilityFlags,
-  canViewSettings as canViewSettingsForRole,
-  isAdminRole,
-  roleLabel,
-} from './lib/roles';
 import { useUserRole } from './hooks/useUserRole';
 import { buildDefaultApprovalCheckpoints, buildDefaultMilestones } from './lib/projectGovernance';
-import { applyBrandingToDocument, useBranding } from './hooks/useBranding';
+import { BrandingProvider, useBranding } from './hooks/useBranding';
 
 import { Project } from './types';
 
@@ -49,55 +41,29 @@ function InternalApp() {
   const [elevatedError, setElevatedError] = useState<string | null>(null);
   const [checkingElevated, setCheckingElevated] = useState(true);
   const {
-    canEditContent: canEditContentFromHook,
-    canManageRoles: canManageRolesFromHook,
-    canManageSettings: canManageSettingsFromHook,
-    canViewSettings: canViewSettingsFromHook,
+    canEditContent,
+    canManageRoles,
+    canManageSettings,
+    canViewSettings,
     loadingRole,
     refreshingRole,
     roleError,
-    roleLabel: roleLabelFromHook,
+    roleLabel,
     refreshRoleClaims,
     rawRole,
     tokenRoleSnapshot,
     mirrorRoleSnapshot,
   } = useUserRole();
-  const [rolePreviewMode, setRolePreviewMode] = useState<RolePreviewMode>('off');
-  const canUseRolePreview = isAdminRole(rawRole);
-  const previewBandRole: AppRole | null =
-    canUseRolePreview && rolePreviewMode !== 'off' && rolePreviewMode !== 'public'
-      ? rolePreviewMode
-      : null;
-  const isPreviewingPublic = canUseRolePreview && rolePreviewMode === 'public';
-  const capsFromPreview = previewBandRole
-    ? effectiveCapabilityFlags(previewBandRole, undefined, undefined)
-    : null;
-  const canEditContent = capsFromPreview?.canEditContent ?? canEditContentFromHook;
-  const canManageRoles = capsFromPreview?.canManageRoles ?? canManageRolesFromHook;
-  const canManageSettings = capsFromPreview?.canManageSettings ?? canManageSettingsFromHook;
-  const canViewSettings = previewBandRole
-    ? canViewSettingsForRole(previewBandRole)
-    : canViewSettingsFromHook;
-  const displayRoleLabel = previewBandRole
-    ? roleLabel(previewBandRole)
-    : roleLabelFromHook;
-  const displayRoleKey = previewBandRole ?? rawRole;
   const modalRef = useRef<HTMLDivElement | null>(null);
-  const { branding, settings } = useBranding();
+  const { branding, settings, refreshSettings, resolvedTheme, themeMode, setThemeMode } = useBranding();
   const mainContentRef = useRef<HTMLElement | null>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
   const modalTitleId = 'new-project-modal-title';
-  const isViewerOnly = previewBandRole ? previewBandRole === 'viewer' : rawRole === 'viewer';
+  const isViewerOnly = rawRole === 'viewer';
 
-  useEffect(() => {
-    applyBrandingToDocument(settings);
-  }, [settings.primaryColor, settings.brandDarkColor]);
-
-  useEffect(() => {
-    if (!isAdminRole(rawRole) && rolePreviewMode !== 'off') {
-      setRolePreviewMode('off');
-    }
-  }, [rawRole, rolePreviewMode]);
+  // Branding colors + theme class are applied by BrandingProvider. Nothing
+  // else to do here; this comment replaces the redundant effect that was
+  // only keeping CSS variables in sync.
 
   useEffect(() => {
     if (isViewerOnly && currentView !== 'portfolio') {
@@ -260,7 +226,15 @@ function InternalApp() {
       case 'record':
         return <RecordView projects={projects} loading={loadingProjects} projectId={selectedProjectId} onBack={() => setCurrentView('kanban')} isAdmin={canEditContent} />;
       case 'settings':
-        return <SettingsView canManageSettings={canManageSettings} canViewSettings={canViewSettings} loadingRole={loadingRole} onRoleRefreshRequested={refreshRoleClaims} onSettingsUpdated={(next) => applyBrandingToDocument(next)} />;
+        return (
+          <SettingsView
+            canManageSettings={canManageSettings}
+            canViewSettings={canViewSettings}
+            loadingRole={loadingRole}
+            onRoleRefreshRequested={refreshRoleClaims}
+            onSettingsUpdated={() => void refreshSettings()}
+          />
+        );
       case 'admin-users':
         return <AdminUsersView canManageRoles={canManageRoles} onRoleRefreshRequested={refreshRoleClaims} currentRole={rawRole} />;
       default:
@@ -366,36 +340,6 @@ function InternalApp() {
     );
   }
 
-  if (isPreviewingPublic) {
-    return (
-      <div className="min-h-screen flex flex-col bg-surface text-on-surface font-body">
-        <Topbar
-          roleLabel={displayRoleLabel}
-          rawRole={displayRoleKey}
-          actualRoleLabel={roleLabelFromHook}
-          roleError={roleError}
-          refreshingRole={refreshingRole}
-          onRefreshPermissions={refreshRoleClaims}
-          onOpenSettings={() => {
-            setRolePreviewMode('off');
-            setCurrentView('settings');
-          }}
-          canViewSettings
-          canManageSettings
-          branding={branding}
-          tokenRoleSnapshot={tokenRoleSnapshot}
-          mirrorRoleSnapshot={mirrorRoleSnapshot}
-          canUseRolePreview={canUseRolePreview}
-          rolePreviewMode={rolePreviewMode}
-          onRolePreviewModeChange={setRolePreviewMode}
-        />
-        <div className="flex-1 overflow-auto">
-          <PublicView embedded />
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex min-h-screen bg-surface text-on-surface font-body">
       <Sidebar
@@ -420,9 +364,8 @@ function InternalApp() {
           {isSidebarMobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
         <Topbar
-          roleLabel={displayRoleLabel}
-          rawRole={displayRoleKey}
-          actualRoleLabel={roleLabelFromHook}
+          roleLabel={roleLabel}
+          rawRole={rawRole}
           roleError={roleError}
           refreshingRole={refreshingRole}
           onRefreshPermissions={refreshRoleClaims}
@@ -432,9 +375,11 @@ function InternalApp() {
           branding={branding}
           tokenRoleSnapshot={tokenRoleSnapshot}
           mirrorRoleSnapshot={mirrorRoleSnapshot}
-          canUseRolePreview={canUseRolePreview}
-          rolePreviewMode={rolePreviewMode}
-          onRolePreviewModeChange={setRolePreviewMode}
+          showRefreshPermissions={settings.showRefreshPermissions !== false}
+          showRoleDebug={settings.showRoleDebug === true}
+          themeMode={themeMode}
+          resolvedTheme={resolvedTheme}
+          onChangeTheme={setThemeMode}
         />
         <main
           ref={mainContentRef}
@@ -559,20 +504,22 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<PublicView />} />
-        <Route path="/login" element={<LoginView />} />
-        <Route 
-          path="/app/*" 
-          element={
-            <ProtectedRoute isAuthenticated={isAuthenticated} isLoading={isLoading}>
-              <InternalApp />
-            </ProtectedRoute>
-          } 
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <BrandingProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<PublicView />} />
+          <Route path="/login" element={<LoginView />} />
+          <Route
+            path="/app/*"
+            element={
+              <ProtectedRoute isAuthenticated={isAuthenticated} isLoading={isLoading}>
+                <InternalApp />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </BrandingProvider>
   );
 }

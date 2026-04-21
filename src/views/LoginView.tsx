@@ -42,11 +42,11 @@ export default function LoginView() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-body">
+    <div className="min-h-screen bg-surface flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-body text-on-surface">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="flex justify-center">
           {branding.logoUrl ? (
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-lg">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-outline-variant/30 bg-surface-container-lowest shadow-lg">
               <img src={branding.logoUrl} alt="" className="max-h-14 max-w-14 object-contain" />
             </div>
           ) : (
@@ -55,33 +55,33 @@ export default function LoginView() {
             </div>
           )}
         </div>
-        <h2 className="mt-6 text-center text-3xl font-extrabold text-slate-900 font-headline">
+        <h2 className="mt-6 text-center text-3xl font-extrabold text-on-surface font-headline">
           Team Login
         </h2>
-        <p className="mt-2 text-center text-sm text-slate-600">
-          Sign in to the {branding.suiteName || APP_CONFIG.appName} workspace for {branding.portalName || APP_CONFIG.portalName}
+        <p className="mt-2 text-center text-sm text-on-surface-variant">
+          Sign in to {branding.portalName || APP_CONFIG.portalName} · {branding.suiteName || APP_CONFIG.appName}
         </p>
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10 border border-slate-200 text-center">
+        <div className="bg-surface-container-lowest py-8 px-4 shadow sm:rounded-xl sm:px-10 border border-outline-variant/20 text-center">
           <button
             onClick={handleLogin}
             disabled={isLoading}
-            className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-slate-300 rounded-md shadow-sm text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-colors disabled:opacity-50"
+            className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-outline-variant/40 rounded-md text-sm font-medium text-on-surface bg-surface-container-low hover:bg-surface-container focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-colors disabled:opacity-50"
           >
             <LogIn className="w-5 h-5" />
-            {isLoading ? 'Signing in...' : 'Sign in with Google'}
+            {isLoading ? 'Signing in…' : 'Sign in with Google'}
           </button>
-          
-          {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
-          
+
+          {error && <p className="mt-4 text-sm text-error">{error}</p>}
+
           <div className="mt-6 text-center">
-            <button 
+            <button
               onClick={() => navigate('/')}
-              className="text-sm text-slate-500 hover:text-primary transition-colors"
+              className="text-sm text-on-surface-variant hover:text-primary transition-colors"
             >
-              &larr; Back to Public Portal
+              &larr; Back to public portal
             </button>
           </div>
         </div>

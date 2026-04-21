@@ -53,6 +53,9 @@ const generateUniqueProjectCode = async (): Promise<string> => {
   throw new Error('Unable to generate unique project code');
 };
 
+export type ThemeMode = 'system' | 'light' | 'dark';
+export type HeroMediaType = 'none' | 'image' | 'video';
+
 export interface Settings {
   aiEnabled: boolean;
   activeProvider: 'gemini' | 'openai' | 'anthropic' | 'gemma' | 'groc';
@@ -64,10 +67,25 @@ export interface Settings {
   suiteName: string;
   portalName: string;
   logoDataUrl?: string;
+  /** Light-mode primary brand color. */
   primaryColor: string;
+  /** Light-mode headline/hero color. */
   brandDarkColor: string;
+  /** Dark-mode primary brand color. */
+  darkPrimaryColor?: string;
+  /** Dark-mode headline/hero color. */
+  darkBrandDarkColor?: string;
   customFooter?: string;
   helpContactEmail?: string;
+  themeMode?: ThemeMode;
+  heroMediaUrl?: string;
+  heroMediaType?: HeroMediaType;
+  /** Toggle visibility of the top-bar "Refresh permissions" button. */
+  showRefreshPermissions?: boolean;
+  /** Toggle visibility of token/mirror role debug text in the top bar and Access Management banner. */
+  showRoleDebug?: boolean;
+  /** Toggle visibility of the portfolio action bar (exports, recompute, sync, digest). */
+  showPortfolioActions?: boolean;
 }
 
 
@@ -175,26 +193,7 @@ export const api = {
     try {
       const docRef = doc(db, 'settings', 'global');
       const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        const data = docSnap.data() as Partial<Settings>;
-        return {
-          aiEnabled: data.aiEnabled ?? false,
-          activeProvider: data.activeProvider ?? 'gemini',
-          aiNextBestActionEnabled: data.aiNextBestActionEnabled ?? true,
-          aiRiskNarrativeEnabled: data.aiRiskNarrativeEnabled ?? true,
-          aiDuplicateDetectionEnabled: data.aiDuplicateDetectionEnabled ?? true,
-          aiRequireHumanApproval: data.aiRequireHumanApproval ?? true,
-          privacyMode: data.privacyMode ?? 'public-read',
-          suiteName: data.suiteName ?? 'AI Librarian Suite',
-          portalName: data.portalName ?? 'Project Archives',
-          logoDataUrl: data.logoDataUrl ?? '',
-          primaryColor: data.primaryColor ?? '#002045',
-          brandDarkColor: data.brandDarkColor ?? '#1A365D',
-          customFooter: data.customFooter ?? '',
-          helpContactEmail: data.helpContactEmail ?? '',
-        };
-      }
-      return {
+      const base: Settings = {
         aiEnabled: false,
         activeProvider: 'gemini',
         aiNextBestActionEnabled: true,
@@ -207,9 +206,46 @@ export const api = {
         logoDataUrl: '',
         primaryColor: '#002045',
         brandDarkColor: '#1A365D',
+        darkPrimaryColor: '#aac7ff',
+        darkBrandDarkColor: '#d6e3ff',
         customFooter: '',
         helpContactEmail: '',
+        themeMode: 'system',
+        heroMediaUrl: '',
+        heroMediaType: 'none',
+        showRefreshPermissions: true,
+        showRoleDebug: false,
+        showPortfolioActions: true,
       };
+      if (docSnap.exists()) {
+        const data = docSnap.data() as Partial<Settings>;
+        return {
+          ...base,
+          aiEnabled: data.aiEnabled ?? base.aiEnabled,
+          activeProvider: data.activeProvider ?? base.activeProvider,
+          aiNextBestActionEnabled: data.aiNextBestActionEnabled ?? base.aiNextBestActionEnabled,
+          aiRiskNarrativeEnabled: data.aiRiskNarrativeEnabled ?? base.aiRiskNarrativeEnabled,
+          aiDuplicateDetectionEnabled: data.aiDuplicateDetectionEnabled ?? base.aiDuplicateDetectionEnabled,
+          aiRequireHumanApproval: data.aiRequireHumanApproval ?? base.aiRequireHumanApproval,
+          privacyMode: data.privacyMode ?? base.privacyMode,
+          suiteName: data.suiteName ?? base.suiteName,
+          portalName: data.portalName ?? base.portalName,
+          logoDataUrl: data.logoDataUrl ?? base.logoDataUrl,
+          primaryColor: data.primaryColor ?? base.primaryColor,
+          brandDarkColor: data.brandDarkColor ?? base.brandDarkColor,
+          darkPrimaryColor: data.darkPrimaryColor ?? base.darkPrimaryColor,
+          darkBrandDarkColor: data.darkBrandDarkColor ?? base.darkBrandDarkColor,
+          customFooter: data.customFooter ?? base.customFooter,
+          helpContactEmail: data.helpContactEmail ?? base.helpContactEmail,
+          themeMode: data.themeMode ?? base.themeMode,
+          heroMediaUrl: data.heroMediaUrl ?? base.heroMediaUrl,
+          heroMediaType: data.heroMediaType ?? base.heroMediaType,
+          showRefreshPermissions: data.showRefreshPermissions ?? base.showRefreshPermissions,
+          showRoleDebug: data.showRoleDebug ?? base.showRoleDebug,
+          showPortfolioActions: data.showPortfolioActions ?? base.showPortfolioActions,
+        };
+      }
+      return base;
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, 'settings/global');
     }
