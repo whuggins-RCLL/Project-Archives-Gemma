@@ -81,6 +81,44 @@ export interface AddCommentOptions {
   attachments?: CommentAttachment[];
 }
 
+// Fields Firestore security rules allow on a project document. The `id` and
+// `createdAt` fields must never be written by the client on update: `id` is
+// not in the allow-list (rejection via `hasOnlyAllowedFields`) and
+// `createdAt` is enforced as immutable. Any extraneous keys (e.g. a stale
+// `id` spread from the in-memory Project object) would cause the Firestore
+// rules to reject the whole write, making it look like "changes don't save".
+const PROJECT_UPDATE_ALLOWED_FIELDS = [
+  'title',
+  'description',
+  'status',
+  'priority',
+  'tags',
+  'dueDate',
+  'code',
+  'owner',
+  'progress',
+  'department',
+  'preservationScore',
+  'riskFactor',
+  'aiDrafts',
+  'milestones',
+  'dependencies',
+  'approvalCheckpoints',
+] as const satisfies ReadonlyArray<keyof Project>;
+
+function sanitizeProjectUpdate(updates: Partial<Project>): Partial<Project> {
+  const sanitized: Partial<Project> = {};
+  for (const field of PROJECT_UPDATE_ALLOWED_FIELDS) {
+    if (field in updates) {
+      const value = updates[field];
+      if (value !== undefined) {
+        (sanitized as Record<string, unknown>)[field] = value;
+      }
+    }
+  }
+  return sanitized;
+}
+
 export const api = {
   getCurrentUserMirrorRole: async (): Promise<AppRole | null> => {
     const mirror = await api.getCurrentUserMirrorSnapshot();
@@ -324,7 +362,8 @@ export const api = {
   updateProject: async (id: string, updates: Partial<Project>): Promise<Project> => {
     try {
       const docRef = doc(db, 'projects', id);
-      const updateData = { ...updates, updatedAt: serverTimestamp() };
+      const sanitized = sanitizeProjectUpdate(updates);
+      const updateData = { ...sanitized, updatedAt: serverTimestamp() };
       await updateDoc(docRef, updateData);
       const updatedDoc = await getDoc(docRef);
       return { id: updatedDoc.id, ...updatedDoc.data() } as Project;
