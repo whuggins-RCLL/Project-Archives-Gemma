@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { Database, AlertTriangle, PieChart, TrendingUp, BookOpen } from 'lucide-react';
+import { Database, AlertTriangle, PieChart, TrendingUp, BookOpen, ChevronDown, MoreHorizontal } from 'lucide-react';
 import { buildPortfolioMetrics } from '../lib/portfolioAnalytics';
 import { api } from '../lib/api';
 import { OperationsDigestReport, Project } from '../types';
 import Button from '../components/Button';
 import { PDF_LAYOUT } from '../lib/uiDefaults';
+import { useBranding } from '../hooks/useBranding';
 
 type SuiteAction = 'refresh' | 'recompute' | 'sync' | 'digest';
 
@@ -101,6 +102,9 @@ function buildPdfReport(projects: Project[], generatedAt: string): string {
 }
 
 export default function PortfolioView({ projects, loading, onProjectClick, onProjectsRefreshed }: PortfolioViewProps) {
+  const { settings } = useBranding();
+  const showActions = settings.showPortfolioActions !== false;
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const metrics = useMemo(() => buildPortfolioMetrics(projects), [projects]);
   const intakeTrendDirection = metrics.intakeTrendPercent >= 0 ? 'up' : 'down';
   const intakeTrendDisplay = `${Math.abs(metrics.intakeTrendPercent).toFixed(1)}% ${intakeTrendDirection}`;
@@ -216,42 +220,58 @@ export default function PortfolioView({ projects, loading, onProjectClick, onPro
             <h2 className="font-headline text-3xl font-extrabold tracking-tight text-on-surface">Portfolio Overview</h2>
             <p className="text-on-surface-variant text-sm">Curation analytics across all active research departments.</p>
           </div>
-          <div className="flex gap-2 flex-wrap justify-end">
-            <Button aria-label="Export as CSV" onClick={handleExportCsv} variant="outline" size="sm">Export CSV</Button>
-            <Button aria-label="Export as PDF" onClick={handleExportPdf} variant="outline" size="sm">Export PDF</Button>
-            <Button
-              onClick={() => runSuiteAction('refresh')}
-              disabled={suiteActionLoading !== null}
-              variant="primary"
-              size="sm"
-            >
-              {suiteActionLoading === 'refresh' ? 'Refreshing...' : 'Refresh Data'}
-            </Button>
-            <Button
-              onClick={() => runSuiteAction('recompute')}
-              disabled={suiteActionLoading !== null}
-              variant="primary"
-              size="sm"
-            >
-              {suiteActionLoading === 'recompute' ? 'Recomputing...' : 'Recompute Metrics'}
-            </Button>
-            <Button
-              onClick={() => runSuiteAction('sync')}
-              disabled={suiteActionLoading !== null}
-              variant="primary"
-              size="sm"
-            >
-              {suiteActionLoading === 'sync' ? 'Syncing...' : 'Sync Tasks'}
-            </Button>
-            <Button
-              onClick={runOperationsDigest}
-              disabled={suiteActionLoading !== null}
-              variant="primary"
-              size="sm"
-            >
-              {suiteActionLoading === 'digest' ? 'Running...' : 'Run Ops Digest'}
-            </Button>
-          </div>
+          {showActions && (
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => runSuiteAction('refresh')}
+                disabled={suiteActionLoading !== null}
+                variant="primary"
+                size="sm"
+              >
+                {suiteActionLoading === 'refresh' ? 'Refreshing…' : 'Refresh data'}
+              </Button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setActionsMenuOpen((prev) => !prev)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-outline-variant/30 bg-surface-container-lowest px-3 text-xs font-semibold text-on-surface-variant hover:bg-surface-container-low"
+                  aria-haspopup="menu"
+                  aria-expanded={actionsMenuOpen}
+                  title="More portfolio actions"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                  <span className="hidden sm:inline">More</span>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+                {actionsMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-11 z-30 w-56 overflow-hidden rounded-lg border border-outline-variant/30 bg-surface-container-lowest shadow-xl"
+                    onMouseLeave={() => setActionsMenuOpen(false)}
+                  >
+                    <PortfolioMenuItem disabled={suiteActionLoading !== null} onSelect={() => { setActionsMenuOpen(false); handleExportCsv(); }} label="Export CSV" />
+                    <PortfolioMenuItem disabled={suiteActionLoading !== null} onSelect={() => { setActionsMenuOpen(false); handleExportPdf(); }} label="Export PDF" />
+                    <div className="my-1 h-px bg-outline-variant/20" />
+                    <PortfolioMenuItem
+                      disabled={suiteActionLoading !== null}
+                      onSelect={() => { setActionsMenuOpen(false); void runSuiteAction('recompute'); }}
+                      label={suiteActionLoading === 'recompute' ? 'Recomputing…' : 'Recompute metrics'}
+                    />
+                    <PortfolioMenuItem
+                      disabled={suiteActionLoading !== null}
+                      onSelect={() => { setActionsMenuOpen(false); void runSuiteAction('sync'); }}
+                      label={suiteActionLoading === 'sync' ? 'Syncing…' : 'Sync governance tasks'}
+                    />
+                    <PortfolioMenuItem
+                      disabled={suiteActionLoading !== null}
+                      onSelect={() => { setActionsMenuOpen(false); void runOperationsDigest(); }}
+                      label={suiteActionLoading === 'digest' ? 'Running…' : 'Run ops digest'}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         {suiteActionMessage && (
           <div className="mb-4 rounded-lg border border-outline-variant/20 bg-surface-container-low px-4 py-2 text-xs font-medium text-on-surface-variant">
@@ -386,5 +406,19 @@ export default function PortfolioView({ projects, loading, onProjectClick, onPro
         </div>
       </section>
     </div>
+  );
+}
+
+function PortfolioMenuItem({ label, onSelect, disabled }: { label: string; onSelect: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onSelect}
+      disabled={disabled}
+      className="block w-full px-3 py-2 text-left text-xs font-medium text-on-surface hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {label}
+    </button>
   );
 }
