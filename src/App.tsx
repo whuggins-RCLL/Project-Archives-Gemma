@@ -21,7 +21,7 @@ import AdminUsersView from './views/AdminUsersView';
 import { api } from './lib/api';
 import { useUserRole } from './hooks/useUserRole';
 import { buildDefaultApprovalCheckpoints, buildDefaultMilestones } from './lib/projectGovernance';
-import { applyBrandingToDocument, useBranding } from './hooks/useBranding';
+import { BrandingProvider, useBranding } from './hooks/useBranding';
 
 import { Project } from './types';
 
@@ -55,15 +55,15 @@ function InternalApp() {
     mirrorRoleSnapshot,
   } = useUserRole();
   const modalRef = useRef<HTMLDivElement | null>(null);
-  const { branding, settings } = useBranding();
+  const { branding, settings, refreshSettings, resolvedTheme, themeMode, setThemeMode } = useBranding();
   const mainContentRef = useRef<HTMLElement | null>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
   const modalTitleId = 'new-project-modal-title';
   const isViewerOnly = rawRole === 'viewer';
 
-  useEffect(() => {
-    applyBrandingToDocument(settings);
-  }, [settings.primaryColor, settings.brandDarkColor]);
+  // Branding colors + theme class are applied by BrandingProvider. Nothing
+  // else to do here; this comment replaces the redundant effect that was
+  // only keeping CSS variables in sync.
 
   useEffect(() => {
     if (isViewerOnly && currentView !== 'portfolio') {
@@ -226,7 +226,15 @@ function InternalApp() {
       case 'record':
         return <RecordView projects={projects} loading={loadingProjects} projectId={selectedProjectId} onBack={() => setCurrentView('kanban')} isAdmin={canEditContent} />;
       case 'settings':
-        return <SettingsView canManageSettings={canManageSettings} canViewSettings={canViewSettings} loadingRole={loadingRole} onRoleRefreshRequested={refreshRoleClaims} onSettingsUpdated={(next) => applyBrandingToDocument(next)} />;
+        return (
+          <SettingsView
+            canManageSettings={canManageSettings}
+            canViewSettings={canViewSettings}
+            loadingRole={loadingRole}
+            onRoleRefreshRequested={refreshRoleClaims}
+            onSettingsUpdated={() => void refreshSettings()}
+          />
+        );
       case 'admin-users':
         return <AdminUsersView canManageRoles={canManageRoles} onRoleRefreshRequested={refreshRoleClaims} currentRole={rawRole} />;
       default:
@@ -367,6 +375,11 @@ function InternalApp() {
           branding={branding}
           tokenRoleSnapshot={tokenRoleSnapshot}
           mirrorRoleSnapshot={mirrorRoleSnapshot}
+          showRefreshPermissions={settings.showRefreshPermissions !== false}
+          showRoleDebug={settings.showRoleDebug === true}
+          themeMode={themeMode}
+          resolvedTheme={resolvedTheme}
+          onChangeTheme={setThemeMode}
         />
         <main
           ref={mainContentRef}
@@ -491,20 +504,22 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<PublicView />} />
-        <Route path="/login" element={<LoginView />} />
-        <Route 
-          path="/app/*" 
-          element={
-            <ProtectedRoute isAuthenticated={isAuthenticated} isLoading={isLoading}>
-              <InternalApp />
-            </ProtectedRoute>
-          } 
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <BrandingProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<PublicView />} />
+          <Route path="/login" element={<LoginView />} />
+          <Route
+            path="/app/*"
+            element={
+              <ProtectedRoute isAuthenticated={isAuthenticated} isLoading={isLoading}>
+                <InternalApp />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </BrandingProvider>
   );
 }
