@@ -2017,6 +2017,23 @@ app.post("/api/admin/users/set-permissions", async (req, res) => {
   }
 });
 
+// Global error handler: any uncaught error from a route handler surfaces as a
+// JSON 500 with enough detail to diagnose from the Vercel logs instead of the
+// opaque FUNCTION_INVOCATION_FAILED page.
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err instanceof Error ? err.message : String(err);
+  const errorName = err instanceof Error ? err.name : "Error";
+  console.error("[server] unhandled error", { errorName, message, stack: err instanceof Error ? err.stack : undefined });
+  if (res.headersSent) return;
+  res.status(500).json({
+    error: "Server error",
+    errorName,
+    message: isProduction ? undefined : message,
+    adminSdkInitialized: adminAuth !== null,
+    adminSdkInitError,
+  });
+});
+
 export default app;
 
 if (!isVercel) {
