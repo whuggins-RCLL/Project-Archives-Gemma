@@ -90,7 +90,9 @@ const ADMIN_SETTINGS_RATE_LIMIT_WINDOW_MS = 60_000;
 const ADMIN_SETTINGS_RATE_LIMIT_MAX_REQUESTS = 15;
 const ADMIN_OPERATIONS_RATE_LIMIT_WINDOW_MS = 60_000;
 const ADMIN_OPERATIONS_RATE_LIMIT_MAX_REQUESTS = 6;
-const ADMIN_SETTINGS_MAX_BODY_BYTES = 8 * 1024;
+// Settings can embed a logo data URL (up to 150 KB) plus 10+ string fields
+// and several booleans. Allow 256 KB so large logo uploads succeed.
+const ADMIN_SETTINGS_MAX_BODY_BYTES = 256 * 1024;
 const ADMIN_OPERATIONS_MAX_BODY_BYTES = 2 * 1024;
 const ADMIN_SETTINGS_TIMEOUT_MS = 8_000;
 const ADMIN_OPERATIONS_TIMEOUT_MS = 15_000;
@@ -124,8 +126,16 @@ type AppSettings = {
   logoDataUrl: string;
   primaryColor: string;
   brandDarkColor: string;
+  darkPrimaryColor?: string;
+  darkBrandDarkColor?: string;
   customFooter?: string;
   helpContactEmail?: string;
+  themeMode?: "system" | "light" | "dark";
+  heroMediaUrl?: string;
+  heroMediaType?: "none" | "image" | "video";
+  showRefreshPermissions?: boolean;
+  showRoleDebug?: boolean;
+  showPortfolioActions?: boolean;
 };
 
 type VerifiedUser = {
@@ -714,6 +724,21 @@ async function verifyFirebaseUser(idToken: string): Promise<VerifiedUser | null>
   }
 }
 
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+const ALLOWED_THEME_MODES = new Set(["system", "light", "dark"]);
+const ALLOWED_HERO_MEDIA_TYPES = new Set(["none", "image", "video"]);
+
+function isSafeHttpUrl(value: string): boolean {
+  if (value.length === 0) return true;
+  if (value.length > 2048) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 function validateSettings(input: unknown): AppSettings | null {
   if (!input || typeof input !== "object") return null;
   const source = input as Record<string, unknown>;
@@ -736,11 +761,19 @@ function validateSettings(input: unknown): AppSettings | null {
     typeof source.logoDataUrl !== "string" ||
     source.logoDataUrl.length > 150_000 ||
     typeof source.primaryColor !== "string" ||
-    !source.primaryColor.match(/^#[0-9A-Fa-f]{6}$/) ||
+    !HEX_COLOR_RE.test(source.primaryColor) ||
     typeof source.brandDarkColor !== "string" ||
-    !source.brandDarkColor.match(/^#[0-9A-Fa-f]{6}$/) ||
+    !HEX_COLOR_RE.test(source.brandDarkColor) ||
+    (source.darkPrimaryColor !== undefined && (typeof source.darkPrimaryColor !== "string" || !HEX_COLOR_RE.test(source.darkPrimaryColor))) ||
+    (source.darkBrandDarkColor !== undefined && (typeof source.darkBrandDarkColor !== "string" || !HEX_COLOR_RE.test(source.darkBrandDarkColor))) ||
     (source.customFooter !== undefined && (typeof source.customFooter !== "string" || source.customFooter.length > 500)) ||
-    (source.helpContactEmail !== undefined && (typeof source.helpContactEmail !== "string" || source.helpContactEmail.length > 254))
+    (source.helpContactEmail !== undefined && (typeof source.helpContactEmail !== "string" || source.helpContactEmail.length > 254)) ||
+    (source.themeMode !== undefined && (typeof source.themeMode !== "string" || !ALLOWED_THEME_MODES.has(source.themeMode))) ||
+    (source.heroMediaType !== undefined && (typeof source.heroMediaType !== "string" || !ALLOWED_HERO_MEDIA_TYPES.has(source.heroMediaType))) ||
+    (source.heroMediaUrl !== undefined && (typeof source.heroMediaUrl !== "string" || !isSafeHttpUrl(source.heroMediaUrl))) ||
+    (source.showRefreshPermissions !== undefined && typeof source.showRefreshPermissions !== "boolean") ||
+    (source.showRoleDebug !== undefined && typeof source.showRoleDebug !== "boolean") ||
+    (source.showPortfolioActions !== undefined && typeof source.showPortfolioActions !== "boolean")
   ) {
     return null;
   }
@@ -758,8 +791,16 @@ function validateSettings(input: unknown): AppSettings | null {
     logoDataUrl: source.logoDataUrl,
     primaryColor: source.primaryColor,
     brandDarkColor: source.brandDarkColor,
+    darkPrimaryColor: typeof source.darkPrimaryColor === "string" ? source.darkPrimaryColor : undefined,
+    darkBrandDarkColor: typeof source.darkBrandDarkColor === "string" ? source.darkBrandDarkColor : undefined,
     customFooter: typeof source.customFooter === "string" ? source.customFooter.trim() : undefined,
     helpContactEmail: typeof source.helpContactEmail === "string" ? source.helpContactEmail.trim() : undefined,
+    themeMode: typeof source.themeMode === "string" ? source.themeMode as AppSettings["themeMode"] : undefined,
+    heroMediaUrl: typeof source.heroMediaUrl === "string" ? source.heroMediaUrl.trim() : undefined,
+    heroMediaType: typeof source.heroMediaType === "string" ? source.heroMediaType as AppSettings["heroMediaType"] : undefined,
+    showRefreshPermissions: typeof source.showRefreshPermissions === "boolean" ? source.showRefreshPermissions : undefined,
+    showRoleDebug: typeof source.showRoleDebug === "boolean" ? source.showRoleDebug : undefined,
+    showPortfolioActions: typeof source.showPortfolioActions === "boolean" ? source.showPortfolioActions : undefined,
   };
 }
 
@@ -777,8 +818,16 @@ function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?
     logoDataUrl: { stringValue: settings.logoDataUrl },
     primaryColor: { stringValue: settings.primaryColor },
     brandDarkColor: { stringValue: settings.brandDarkColor },
+    ...(settings.darkPrimaryColor !== undefined && { darkPrimaryColor: { stringValue: settings.darkPrimaryColor } }),
+    ...(settings.darkBrandDarkColor !== undefined && { darkBrandDarkColor: { stringValue: settings.darkBrandDarkColor } }),
     ...(settings.customFooter !== undefined && { customFooter: { stringValue: settings.customFooter } }),
     ...(settings.helpContactEmail !== undefined && { helpContactEmail: { stringValue: settings.helpContactEmail } }),
+    ...(settings.themeMode !== undefined && { themeMode: { stringValue: settings.themeMode } }),
+    ...(settings.heroMediaUrl !== undefined && { heroMediaUrl: { stringValue: settings.heroMediaUrl } }),
+    ...(settings.heroMediaType !== undefined && { heroMediaType: { stringValue: settings.heroMediaType } }),
+    ...(settings.showRefreshPermissions !== undefined && { showRefreshPermissions: { booleanValue: settings.showRefreshPermissions } }),
+    ...(settings.showRoleDebug !== undefined && { showRoleDebug: { booleanValue: settings.showRoleDebug } }),
+    ...(settings.showPortfolioActions !== undefined && { showPortfolioActions: { booleanValue: settings.showPortfolioActions } }),
   };
 }
 
@@ -799,8 +848,16 @@ function fromFirestoreFields(
     logoDataUrl: fields.logoDataUrl?.stringValue,
     primaryColor: fields.primaryColor?.stringValue,
     brandDarkColor: fields.brandDarkColor?.stringValue,
+    darkPrimaryColor: fields.darkPrimaryColor?.stringValue,
+    darkBrandDarkColor: fields.darkBrandDarkColor?.stringValue,
     customFooter: fields.customFooter?.stringValue,
     helpContactEmail: fields.helpContactEmail?.stringValue,
+    themeMode: fields.themeMode?.stringValue as AppSettings["themeMode"] | undefined,
+    heroMediaUrl: fields.heroMediaUrl?.stringValue,
+    heroMediaType: fields.heroMediaType?.stringValue as AppSettings["heroMediaType"] | undefined,
+    showRefreshPermissions: fields.showRefreshPermissions?.booleanValue,
+    showRoleDebug: fields.showRoleDebug?.booleanValue,
+    showPortfolioActions: fields.showPortfolioActions?.booleanValue,
   };
 }
 
@@ -917,9 +974,11 @@ async function fetchFirestoreSettings(): Promise<Partial<AppSettings>> {
 }
 
 async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
-  await firestoreCall("settings/global", {
+  const fields = toFirestoreFields(settings);
+  const fieldPaths = Object.keys(fields).map((key) => `updateMask.fieldPaths=${encodeURIComponent(key)}`).join("&");
+  await firestoreCall(`settings/global?${fieldPaths}`, {
     method: "PATCH",
-    body: { fields: toFirestoreFields(settings) },
+    body: { fields },
   });
 }
 
@@ -1062,15 +1121,18 @@ async function getElevatedAccessConfig(): Promise<{ passwordHash: string; needsC
 }
 
 async function saveElevatedAccessConfig(config: { passwordHash: string; needsChange: boolean }): Promise<void> {
-  await firestoreCall("settings/global", {
-    method: "PATCH",
-    body: {
-      fields: {
-        elevatedPasswordHash: { stringValue: config.passwordHash },
-        elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
+  await firestoreCall(
+    "settings/global?updateMask.fieldPaths=elevatedPasswordHash&updateMask.fieldPaths=elevatedPasswordNeedsChange",
+    {
+      method: "PATCH",
+      body: {
+        fields: {
+          elevatedPasswordHash: { stringValue: config.passwordHash },
+          elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
+        },
       },
     },
-  });
+  );
 }
 
 async function resolveEffectiveRole(verifiedUser: VerifiedUser): Promise<AppRole> {
@@ -1181,7 +1243,8 @@ app.use(
     },
   }),
 );
-app.use(express.json({ limit: "16kb" }));
+// Body limit sized to hold a full 150 KB logo data URL plus other settings.
+app.use(express.json({ limit: "512kb" }));
 app.set("trust proxy", getTrustProxySetting());
 
 if (!hasUpstash) {
