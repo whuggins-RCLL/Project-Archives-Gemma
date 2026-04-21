@@ -188,7 +188,16 @@ service cloud.firestore {
 
     function isValidSettings(data) {
       return hasRequiredFields(['aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor']) &&
-             hasOnlyAllowedFields(['aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor', 'customFooter', 'helpContactEmail']) &&
+             hasOnlyAllowedFields([
+               'aiEnabled', 'activeProvider', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled',
+               'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode',
+               'suiteName', 'portalName', 'logoDataUrl',
+               'primaryColor', 'brandDarkColor', 'darkPrimaryColor', 'darkBrandDarkColor',
+               'customFooter', 'helpContactEmail',
+               'themeMode', 'heroMediaUrl', 'heroMediaType',
+               'showRefreshPermissions', 'showRoleDebug', 'showPortfolioActions',
+               'elevatedPasswordHash', 'elevatedPasswordNeedsChange'
+             ]) &&
              data.aiEnabled is bool &&
              data.activeProvider in ['gemini', 'openai', 'anthropic', 'gemma', 'groc'] &&
              data.aiNextBestActionEnabled is bool &&
@@ -204,8 +213,18 @@ service cloud.firestore {
              data.primaryColor.matches('^#[0-9A-Fa-f]{6}$') &&
              data.brandDarkColor is string &&
              data.brandDarkColor.matches('^#[0-9A-Fa-f]{6}$') &&
+             (!('darkPrimaryColor' in data) || (data.darkPrimaryColor is string && data.darkPrimaryColor.matches('^#[0-9A-Fa-f]{6}$'))) &&
+             (!('darkBrandDarkColor' in data) || (data.darkBrandDarkColor is string && data.darkBrandDarkColor.matches('^#[0-9A-Fa-f]{6}$'))) &&
              (!('customFooter' in data) || (data.customFooter is string && data.customFooter.size() <= 500)) &&
-             (!('helpContactEmail' in data) || (data.helpContactEmail is string && data.helpContactEmail.size() <= 254));
+             (!('helpContactEmail' in data) || (data.helpContactEmail is string && data.helpContactEmail.size() <= 254)) &&
+             (!('themeMode' in data) || data.themeMode in ['system', 'light', 'dark']) &&
+             (!('heroMediaUrl' in data) || (data.heroMediaUrl is string && data.heroMediaUrl.size() <= 2048)) &&
+             (!('heroMediaType' in data) || data.heroMediaType in ['none', 'image', 'video']) &&
+             (!('showRefreshPermissions' in data) || data.showRefreshPermissions is bool) &&
+             (!('showRoleDebug' in data) || data.showRoleDebug is bool) &&
+             (!('showPortfolioActions' in data) || data.showPortfolioActions is bool) &&
+             (!('elevatedPasswordHash' in data) || (data.elevatedPasswordHash is string && data.elevatedPasswordHash.size() <= 256)) &&
+             (!('elevatedPasswordNeedsChange' in data) || data.elevatedPasswordNeedsChange is bool);
     }
 
     function currentPrivacyMode() {
