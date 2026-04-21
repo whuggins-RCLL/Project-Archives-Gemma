@@ -1223,26 +1223,69 @@ async function bootstrapOwnersFromEnv(): Promise<void> {
   }
 }
 
+// Same-origin requests on Vercel (e.g. the app calling /api/... at the same
+// https://<project>.vercel.app host) still send an Origin header. Accept them
+// implicitly, plus any *.vercel.app host, so admins don't have to maintain a
+// CORS_ALLOWED_ORIGINS allowlist just to unblock their own frontend. Requests
+// from arbitrary third-party origins must still appear in the configured
+// allowlist.
+function isVercelHost(host: string): boolean {
+  return host.endsWith(".vercel.app");
+}
+
+function isSameOriginRequest(req: express.Request, origin: string): boolean {
+  try {
+    const { host, protocol } = new URL(origin);
+    const forwardedHost = (req.headers["x-forwarded-host"] || req.headers.host || "").toString();
+    const forwardedProto = (req.headers["x-forwarded-proto"] || (req.secure ? "https" : "http")).toString();
+    if (!forwardedHost) return false;
+    return host === forwardedHost && protocol.replace(":", "") === forwardedProto;
+  } catch {
+    return false;
+  }
+}
+
 app.use(
   cors({
     origin(origin, callback) {
+      // cors passes the request object via `this` binding? No — we wrap below.
+      // The real per-request decision happens inside the middleware wrapper.
       if (!origin) {
         callback(null, true);
         return;
       }
-
-      const isAllowedByConfig = allowedOrigins.includes(origin);
-      const isAllowedDevOrigin = !isProduction && devOrigins.includes(origin);
-
-      if (isAllowedByConfig || isAllowedDevOrigin) {
-        callback(null, true);
-        return;
-      }
-
-      callback(new Error("CORS origin denied"));
+      callback(null, true); // default permissive; real check runs in wrapper below
     },
   }),
 );
+
+// Wrapper that enforces CORS policy using the request context so we can treat
+// same-origin + vercel.app hosts as allowed without requiring explicit config.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || typeof origin !== "string") {
+    return next();
+  }
+  const isAllowedByConfig = allowedOrigins.includes(origin);
+  const isAllowedDevOrigin = !isProduction && devOrigins.includes(origin);
+  let isAllowedVercel = false;
+  try {
+    isAllowedVercel = isVercelHost(new URL(origin).host);
+  } catch {
+    isAllowedVercel = false;
+  }
+  const sameOrigin = isSameOriginRequest(req, origin);
+  if (isAllowedByConfig || isAllowedDevOrigin || isAllowedVercel || sameOrigin) {
+    return next();
+  }
+  auditLog("cors_origin_denied", {
+    origin,
+    host: req.headers.host,
+    forwardedHost: req.headers["x-forwarded-host"],
+    path: req.path,
+  }, "error");
+  res.status(403).json({ error: "CORS origin denied", origin });
+});
 // Body limit sized to hold a full 150 KB logo data URL plus other settings.
 app.use(express.json({ limit: "512kb" }));
 app.set("trust proxy", getTrustProxySetting());
