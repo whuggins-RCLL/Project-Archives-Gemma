@@ -33,6 +33,11 @@ export default function RecordView({ projects, loading: projectsLoading, project
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [selectedModel, setSelectedModel] = useState(AI_MODEL_OPTIONS[0]?.id ?? '');
 
+  const providerForSelectedModel = () => {
+    const hit = AI_MODEL_OPTIONS.find((m) => m.id === selectedModel);
+    return hit?.provider ?? settings?.activeProvider ?? 'gemini';
+  };
+
   useEffect(() => {
     api.getSettings().then(setSettings);
   }, []);
@@ -61,12 +66,15 @@ export default function RecordView({ projects, loading: projectsLoading, project
   }, [projectId]);
 
   useEffect(() => {
-    if (!settings?.activeProvider) return;
-    const providerOptions = AI_MODEL_OPTIONS.filter((option) => option.provider === settings.activeProvider);
-    if (providerOptions.length > 0) {
-      setSelectedModel(providerOptions[0].id);
-    }
-  }, [settings?.activeProvider]);
+    if (!settings?.enabledProviders?.length) return;
+    const models = AI_MODEL_OPTIONS.filter((option) => settings.enabledProviders.includes(option.provider));
+    if (models.length === 0) return;
+    setSelectedModel((current) => {
+      if (models.some((m) => m.id === current)) return current;
+      const preferred = models.find((m) => m.provider === settings.activeProvider);
+      return (preferred ?? models[0]).id;
+    });
+  }, [settings?.enabledProviders, settings?.activeProvider]);
 
   const handleSave = async () => {
     if (!isAdmin) return;
@@ -228,7 +236,7 @@ export default function RecordView({ projects, loading: projectsLoading, project
       const prompt = `Based on the following project description, generate 3-5 relevant tags. Return ONLY a comma-separated list of tags, nothing else. Description: ${project.description}`;
       const response = await api.generateAI(
         prompt,
-        settings.activeProvider,
+        providerForSelectedModel(),
         selectedModel,
         "You are an expert project manager. Generate concise, relevant tags.",
         "autoTag",
@@ -257,7 +265,7 @@ export default function RecordView({ projects, loading: projectsLoading, project
       const prompt = `Summarize the following project and its recent comments into a concise executive summary (2-3 sentences max). \n\nProject Title: ${project.title}\nCurrent Description: ${project.description}\n\nRecent Comments:\n${commentsText}`;
       const response = await api.generateAI(
         prompt,
-        settings.activeProvider,
+        providerForSelectedModel(),
         selectedModel,
         "You are an executive assistant. Provide a concise, professional summary.",
         "summarize",
@@ -312,7 +320,7 @@ Risk: ${project.riskFactor}
 Description: ${project.description}`;
       const response = await api.generateAI(
         prompt,
-        settings.activeProvider,
+        providerForSelectedModel(),
         selectedModel,
         'You are a PMO copilot. Return strict JSON only.',
         'nextBestAction',
@@ -357,7 +365,7 @@ Dependencies: ${(project.dependencies ?? []).map((d) => `${d.description} (${d.s
 Pending approvals: ${(project.approvalCheckpoints ?? []).filter((c) => c.required && !c.approved).length}`;
       const response = await api.generateAI(
         prompt,
-        settings.activeProvider,
+        providerForSelectedModel(),
         selectedModel,
         'You are an enterprise risk analyst. Return strict JSON only.',
         'riskNarrative',
@@ -765,7 +773,7 @@ Pending approvals: ${(project.approvalCheckpoints ?? []).filter((c) => c.require
                   onChange={(e) => setSelectedModel(e.target.value)}
                 >
                   {AI_MODEL_OPTIONS
-                    .filter((option) => option.provider === settings.activeProvider)
+                    .filter((option) => (settings.enabledProviders ?? [settings.activeProvider]).includes(option.provider))
                     .map((option) => (
                       <option key={option.id} value={option.id}>
                         {option.label} — {option.description}

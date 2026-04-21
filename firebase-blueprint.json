@@ -150,7 +150,22 @@
             "groq",
             "groc"
           ],
-          "description": "The active AI provider."
+          "description": "Default vendor when picking the initial model (must appear in enabledProviders)."
+        },
+        "enabledProviders": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "gemini",
+              "openai",
+              "anthropic",
+              "gemma",
+              "groq",
+              "groc"
+            ]
+          },
+          "description": "Which vendors appear in the model dropdown; must include activeProvider."
         },
         "aiAutoTagEnabled": {
           "type": "boolean",

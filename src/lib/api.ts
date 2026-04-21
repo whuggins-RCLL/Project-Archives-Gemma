@@ -18,7 +18,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path,
     errorMessage,
   });
-  throw new Error(`Failed to ${operationType} resource`);
+  throw new Error(errorMessage);
 }
 
 const formatProjectCodeTimestamp = (date: Date): string => {
@@ -53,9 +53,13 @@ const generateUniqueProjectCode = async (): Promise<string> => {
   throw new Error('Unable to generate unique project code');
 };
 
+export type AiProviderId = 'gemini' | 'openai' | 'anthropic' | 'gemma' | 'groc' | 'groq';
+
 export interface Settings {
   aiEnabled: boolean;
-  activeProvider: 'gemini' | 'openai' | 'anthropic' | 'gemma' | 'groc' | 'groq';
+  activeProvider: AiProviderId;
+  /** Vendors whose models appear in the model picker (multi-select). Must include `activeProvider`. */
+  enabledProviders: AiProviderId[];
   /** When master AI is on, controls Auto-Tag on project records. */
   aiAutoTagEnabled: boolean;
   /** When master AI is on, controls AI Summarize on project records. */
@@ -180,11 +184,22 @@ export const api = {
       const docRef = doc(db, 'settings', 'global');
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        const data = docSnap.data() as Partial<Settings>;
+        const data = docSnap.data() as Partial<Settings> & { enabledProviders?: unknown };
         const aiEnabled = data.aiEnabled ?? false;
+        const active = (data.activeProvider ?? 'gemini') as Settings['activeProvider'];
+        const rawList = data.enabledProviders;
+        const parsedList = Array.isArray(rawList)
+          ? [...new Set(rawList.filter((id): id is Settings['activeProvider'] =>
+              id === 'gemini' || id === 'openai' || id === 'anthropic' || id === 'gemma' || id === 'groc' || id === 'groq',
+            ))]
+          : [];
+        const enabledProviders: Settings['enabledProviders'] =
+          parsedList.length > 0 ? parsedList : [active];
+        const mergedEnabled = enabledProviders.includes(active) ? enabledProviders : [...enabledProviders, active];
         return {
           aiEnabled,
-          activeProvider: data.activeProvider ?? 'gemini',
+          activeProvider: active,
+          enabledProviders: mergedEnabled,
           aiAutoTagEnabled: data.aiAutoTagEnabled ?? aiEnabled,
           aiSummarizeEnabled: data.aiSummarizeEnabled ?? aiEnabled,
           aiNextBestActionEnabled: data.aiNextBestActionEnabled ?? true,
@@ -204,6 +219,7 @@ export const api = {
       return {
         aiEnabled: false,
         activeProvider: 'gemini',
+        enabledProviders: ['gemini'],
         aiAutoTagEnabled: false,
         aiSummarizeEnabled: false,
         aiNextBestActionEnabled: true,

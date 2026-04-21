@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Save, Bot, Key, Shield } from 'lucide-react';
-import { api, Settings } from '../lib/api';
+import { api, Settings, type AiProviderId } from '../lib/api';
 import { AI_PROVIDER_OPTIONS } from '../lib/uiDefaults';
 
 export default function SettingsView({
@@ -20,6 +20,7 @@ export default function SettingsView({
   const [settings, setSettings] = useState<Settings>({
     aiEnabled: false,
     activeProvider: 'gemini',
+    enabledProviders: ['gemini'],
     aiAutoTagEnabled: true,
     aiSummarizeEnabled: true,
     aiNextBestActionEnabled: true,
@@ -81,8 +82,12 @@ export default function SettingsView({
       onSettingsUpdated?.(settings);
       setToast({ type: 'success', message: 'Settings saved successfully.' });
     } catch (error) {
-      console.error('Failed to save settings');
-      setToast({ type: 'error', message: 'Failed to save settings. Ensure you have admin privileges.' });
+      console.error('Failed to save settings', error);
+      const msg = error instanceof Error ? error.message : 'Failed to save settings.';
+      setToast({
+        type: 'error',
+        message: msg.length > 220 ? `${msg.slice(0, 217)}…` : msg,
+      });
     } finally {
       setSaving(false);
     }
@@ -360,34 +365,78 @@ export default function SettingsView({
             </label>
           </div>
 
-          {/* Provider selection stays clickable even when master AI is off (only readOnly blocks clicks). */}
+          {/* Provider selection: multi-select which vendors appear in the model picker; one default for initial model. */}
           <div className={readOnly ? 'pointer-events-none opacity-75' : ''}>
-            <h3 className="font-bold text-on-surface mb-1">Active AI provider</h3>
+            <h3 className="font-bold text-on-surface mb-1">AI vendors &amp; models</h3>
             <p className="text-xs text-on-surface-variant mb-3">
-              Choose which vendor receives model requests after you save. This is not a link to an external site — click a card to select, then use <strong className="text-on-surface">Save Settings</strong>.
+              Check every vendor you want in the <strong className="text-on-surface">model</strong> dropdown on project pages. Click <strong className="text-on-surface">Set default</strong> for the vendor used when the page first loads. The API call always uses the <strong className="text-on-surface">model you pick</strong> (each model belongs to one vendor). Save with <strong className="text-on-surface">Save Settings</strong>.
               {!settings.aiEnabled && (
-                <span className="block mt-1">Turn <strong className="text-on-surface">Enable AI</strong> on to actually call the API from project pages.</span>
+                <span className="block mt-1">Turn <strong className="text-on-surface">Enable AI</strong> on to run inference from the app.</span>
               )}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {AI_PROVIDER_OPTIONS.map((provider) => {
-                const selected = settings.activeProvider === provider.id;
+                const id = provider.id as AiProviderId;
+                const inPicker = settings.enabledProviders.includes(id);
+                const isDefault = settings.activeProvider === id;
+                const toggleInPicker = () => {
+                  if (readOnly) return;
+                  setSettings((prev) => {
+                    let next = [...prev.enabledProviders];
+                    if (next.includes(id)) {
+                      if (next.length === 1) return prev;
+                      next = next.filter((p) => p !== id);
+                      const nextDefault = prev.activeProvider === id ? (next[0] as AiProviderId) : prev.activeProvider;
+                      return { ...prev, enabledProviders: next, activeProvider: nextDefault };
+                    }
+                    next = [...next, id];
+                    return { ...prev, enabledProviders: next };
+                  });
+                };
+                const setDefault = () => {
+                  if (readOnly) return;
+                  setSettings((prev) => ({
+                    ...prev,
+                    activeProvider: id,
+                    enabledProviders: prev.enabledProviders.includes(id) ? prev.enabledProviders : [...prev.enabledProviders, id],
+                  }));
+                };
                 return (
-                  <button
+                  <div
                     key={provider.id}
-                    type="button"
-                    disabled={readOnly}
-                    aria-pressed={selected}
-                    onClick={() => setSettings({ ...settings, activeProvider: provider.id })}
-                    className={`text-left p-4 rounded-lg border-2 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 ${
-                      selected
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      isDefault
                         ? 'border-primary bg-primary/5'
-                        : 'border-outline-variant/20 hover:border-primary/30 bg-surface-container-lowest'
-                    } ${readOnly ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'}`}
+                        : 'border-outline-variant/20 bg-surface-container-lowest'
+                    }`}
                   >
-                    <div className="font-bold text-sm text-on-surface">{provider.name}</div>
-                    <div className="text-xs text-on-surface-variant mt-1">{provider.desc}</div>
-                  </button>
+                    <div className="flex items-start gap-3">
+                      <label className="flex items-center gap-2 shrink-0 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          className="rounded border-outline-variant"
+                          checked={inPicker}
+                          disabled={readOnly}
+                          onChange={toggleInPicker}
+                        />
+                        <span className="text-[11px] font-bold text-on-surface-variant uppercase">Models</span>
+                      </label>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-sm text-on-surface">{provider.name}</div>
+                        <div className="text-xs text-on-surface-variant mt-1">{provider.desc}</div>
+                        <button
+                          type="button"
+                          disabled={readOnly}
+                          onClick={setDefault}
+                          className={`mt-2 text-[11px] font-bold px-2 py-1 rounded ${
+                            isDefault ? 'bg-primary text-white' : 'text-primary hover:bg-primary/10'
+                          } disabled:opacity-50`}
+                        >
+                          {isDefault ? 'Default vendor' : 'Set default'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 );
               })}
             </div>

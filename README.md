@@ -206,17 +206,17 @@ The Digital Archivist includes optional AI features (Auto-Tagging, Summarization
 ### Enabling AI Features
 1. Log in as an Admin.
 2. Navigate to the **Settings** tab in the sidebar.
-3. Toggle **Enable AI** (master switch), choose **Active AI provider**, then enable each **product** (Auto-tag, AI summarize, next-best actions, risk narrative, duplicate detection) independently.
+3. Toggle **Enable AI** (master switch). Under **AI vendors & models**, check every vendor you want in the project **model** dropdown, and set one **default** vendor. Then enable each **product** (Auto-tag, AI summarize, next-best actions, risk narrative, duplicate detection) independently.
 4. Optionally require human approval before AI drafts are treated as approved.
 
-After upgrading, **save settings once** so Firestore includes the new fields (`aiAutoTagEnabled`, `aiSummarizeEnabled`). Deploy updated **`firestore.rules`** if clients write `settings/global` directly.
+After upgrading, **save settings once** so Firestore includes new fields (`enabledProviders`, `aiAutoTagEnabled`, `aiSummarizeEnabled`, …). **Deploy updated `firestore.rules`** (required for saves to succeed when rules enforce the new shape).
 
 ### Multi-Model Chat Setup (for future clones)
 Use this checklist if you are re-implementing model selection in a fresh clone:
 
 1. Define a shared `AIModelOption` type in `src/types.ts` with `id`, `label`, `description`, and `provider`.
-2. Add a shared `AI_MODEL_OPTIONS` list in `src/constants.tsx` (model ID + human label + short description).
-3. In the AI interaction UI (record/chat workflows), add `selectedModel` state and a `<select>` bound to the options for the active provider.
+2. Add a shared `AI_MODEL_OPTIONS` list in `aiModelCatalog.ts` (re-exported from `src/constants.tsx`) with `id`, `label`, `description`, and `provider`.
+3. In the AI interaction UI (record/chat workflows), add `selectedModel` state and a `<select>` bound to models whose `provider` is in `settings.enabledProviders`.
 4. Pass `selectedModel` into every AI send/generate call on the client.
 5. Update `api.generateAI(...)` (or equivalent client API helper) to accept `model: string` and include it in the `/api/ai/generate` POST body (plus a `feature` key: `autoTag`, `summarize`, `nextBestAction`, or `riskNarrative` for server-side capability checks).
 6. Update the server route (`/api/ai/generate`) to require `model` and forward it into the provider SDK request body (`model` field) so the chosen model is actually used.

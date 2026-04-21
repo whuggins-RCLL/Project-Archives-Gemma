@@ -8,6 +8,7 @@ import { GoogleGenAI } from "@google/genai";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import admin from "firebase-admin";
+import { resolveProviderForModel } from "./aiModelCatalog";
 
 dotenv.config();
 
@@ -117,6 +118,8 @@ type RateLimitEntry = {
 type AppSettings = {
   aiEnabled: boolean;
   activeProvider: string;
+  /** Which vendor tabs appear in the model picker; must include activeProvider. */
+  enabledProviders: string[];
   aiAutoTagEnabled: boolean;
   aiSummarizeEnabled: boolean;
   aiNextBestActionEnabled: boolean;
@@ -464,6 +467,10 @@ function parseFirestoreValue(field: Record<string, unknown> | undefined): unknow
   if (typeof field.doubleValue === "number") return field.doubleValue;
   if (typeof field.booleanValue === "boolean") return field.booleanValue;
   if (field.timestampValue) return field.timestampValue;
+  if (field.arrayValue && typeof field.arrayValue === "object") {
+    const values = (field.arrayValue as { values?: Array<Record<string, unknown>> }).values || [];
+    return values.map((entry) => parseFirestoreValue(entry)).filter((v) => v !== undefined);
+  }
   if (field.mapValue && typeof field.mapValue === "object") {
     const mapFields = (field.mapValue as { fields?: Record<string, Record<string, unknown>> }).fields || {};
     return Object.fromEntries(Object.entries(mapFields).map(([key, nested]) => [key, parseFirestoreValue(nested)]));
@@ -758,9 +765,25 @@ function validateSettings(input: unknown): AppSettings | null {
   const aiSummarizeEnabled =
     typeof source.aiSummarizeEnabled === "boolean" ? source.aiSummarizeEnabled : aiEnabled;
 
+  let enabledProviders: string[];
+  if (Array.isArray(source.enabledProviders)) {
+    enabledProviders = [...new Set(
+      source.enabledProviders.filter((id): id is string => typeof id === "string" && ALLOWED_PROVIDERS.has(id)),
+    )];
+  } else {
+    enabledProviders = [source.activeProvider];
+  }
+  if (!enabledProviders.includes(source.activeProvider)) {
+    enabledProviders = [...enabledProviders, source.activeProvider];
+  }
+  if (enabledProviders.length === 0) {
+    enabledProviders = [source.activeProvider];
+  }
+
   return {
     aiEnabled,
     activeProvider: source.activeProvider,
+    enabledProviders,
     aiAutoTagEnabled,
     aiSummarizeEnabled,
     aiNextBestActionEnabled: source.aiNextBestActionEnabled,
@@ -778,10 +801,15 @@ function validateSettings(input: unknown): AppSettings | null {
   };
 }
 
-function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?: string; booleanValue?: boolean }> {
+function toFirestoreFields(settings: AppSettings): Record<string, Record<string, unknown>> {
   return {
     aiEnabled: { booleanValue: settings.aiEnabled },
     activeProvider: { stringValue: settings.activeProvider },
+    enabledProviders: {
+      arrayValue: {
+        values: settings.enabledProviders.map((id) => ({ stringValue: id })),
+      },
+    },
     aiAutoTagEnabled: { booleanValue: settings.aiAutoTagEnabled },
     aiSummarizeEnabled: { booleanValue: settings.aiSummarizeEnabled },
     aiNextBestActionEnabled: { booleanValue: settings.aiNextBestActionEnabled },
@@ -803,9 +831,14 @@ function fromFirestoreFields(
   fields: Record<string, { stringValue?: string; booleanValue?: boolean }> | undefined,
 ): Partial<AppSettings> {
   if (!fields) return {};
+  const rawEnabled = parseFirestoreValue(fields.enabledProviders as Record<string, unknown> | undefined);
+  const enabledProviders = Array.isArray(rawEnabled)
+    ? rawEnabled.filter((id): id is string => typeof id === "string" && ALLOWED_PROVIDERS.has(id))
+    : undefined;
   return {
     aiEnabled: fields.aiEnabled?.booleanValue,
     activeProvider: fields.activeProvider?.stringValue,
+    ...(enabledProviders !== undefined && enabledProviders.length > 0 ? { enabledProviders } : {}),
     aiAutoTagEnabled: fields.aiAutoTagEnabled?.booleanValue,
     aiSummarizeEnabled: fields.aiSummarizeEnabled?.booleanValue,
     aiNextBestActionEnabled: fields.aiNextBestActionEnabled?.booleanValue,
@@ -1443,14 +1476,14 @@ app.post("/api/ai/generate", async (req, res) => {
         requestId,
         actorUid: verifiedUser.uid,
         actorEmail: verifiedUser.email,
-        provider: req.body?.provider ?? "unknown",
+        provider: typeof req.body?.model === "string" ? resolveProviderForModel(req.body.model.trim()) ?? "unknown" : "unknown",
         ip: clientIp,
         reason: "rate_limit_exceeded",
       });
       return res.status(429).json({ error: "Rate limit exceeded. Please wait and try again." });
     }
 
-    const { prompt, provider, model, systemInstruction, feature } = req.body;
+    const { prompt, model, systemInstruction, feature } = req.body;
 
     if (typeof feature !== "string" || !AI_FEATURE_KEYS.has(feature)) {
       return res.status(400).json({ error: "Invalid or missing AI feature key" });
@@ -1500,18 +1533,32 @@ app.post("/api/ai/generate", async (req, res) => {
       return res.status(400).json({ error: `System instruction exceeds max length of ${MAX_SYSTEM_INSTRUCTION_LENGTH}` });
     }
 
-    if (typeof provider !== "string" || !ALLOWED_PROVIDERS.has(provider)) {
-      return res.status(400).json({ error: "Invalid provider" });
-    }
     if (typeof model !== "string" || model.trim().length === 0) {
       return res.status(400).json({ error: "Model is required" });
+    }
+
+    const effectiveProvider = resolveProviderForModel(model.trim());
+    if (!effectiveProvider || !ALLOWED_PROVIDERS.has(effectiveProvider)) {
+      return res.status(400).json({ error: "Unknown or unsupported model id" });
+    }
+
+    const fallbackActive =
+      typeof storedSettings.activeProvider === "string" && ALLOWED_PROVIDERS.has(storedSettings.activeProvider)
+        ? storedSettings.activeProvider
+        : "gemini";
+    const enabledList = Array.isArray(storedSettings.enabledProviders)
+      ? storedSettings.enabledProviders.filter((id): id is string => typeof id === "string" && ALLOWED_PROVIDERS.has(id))
+      : [];
+    const enabledSet = new Set(enabledList.length > 0 ? enabledList : [fallbackActive]);
+    if (!enabledSet.has(effectiveProvider)) {
+      return res.status(403).json({ error: "This model's vendor is not enabled in archive settings." });
     }
 
     auditLog("admin_ai_usage_started", {
       requestId,
       actorUid: verifiedUser.uid,
       actorEmail: verifiedUser.email,
-      provider,
+      provider: effectiveProvider,
       model,
       feature,
       promptLength: prompt.length,
@@ -1521,7 +1568,7 @@ app.post("/api/ai/generate", async (req, res) => {
 
     let responseText = "";
 
-    if (provider === "gemini") {
+    if (effectiveProvider === "gemini") {
       if (!process.env.GEMINI_API_KEY) throw new Error("Gemini provider is not configured");
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const response = await ai.models.generateContent({
@@ -1530,7 +1577,7 @@ app.post("/api/ai/generate", async (req, res) => {
         config: { systemInstruction }
       });
       responseText = response.text || "";
-    } else if (provider === "openai") {
+    } else if (effectiveProvider === "openai") {
       if (!process.env.OPENAI_API_KEY) throw new Error("OpenAI provider is not configured");
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const messages: Array<{ role: "system" | "user"; content: string }> = [];
@@ -1542,7 +1589,7 @@ app.post("/api/ai/generate", async (req, res) => {
         messages
       });
       responseText = response.choices[0]?.message?.content || "";
-    } else if (provider === "anthropic") {
+    } else if (effectiveProvider === "anthropic") {
       if (!process.env.ANTHROPIC_API_KEY) throw new Error("Anthropic provider is not configured");
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const response = await anthropic.messages.create({
@@ -1552,7 +1599,7 @@ app.post("/api/ai/generate", async (req, res) => {
         messages: [{ role: "user", content: prompt }]
       });
       responseText = response.content[0].type === "text" ? response.content[0].text : "";
-    } else if (provider === "gemma") {
+    } else if (effectiveProvider === "gemma") {
       if (!process.env.GEMMA_API_KEY || !process.env.GEMMA_BASE_URL) {
         throw new Error("Gemma provider is not configured");
       }
@@ -1569,7 +1616,7 @@ app.post("/api/ai/generate", async (req, res) => {
         messages
       });
       responseText = response.choices[0]?.message?.content || "";
-    } else if (provider === "groc") {
+    } else if (effectiveProvider === "groc") {
       if (!process.env.GROC_API_KEY || !process.env.GROC_BASE_URL) {
         throw new Error("Groc provider is not configured");
       }
@@ -1586,7 +1633,7 @@ app.post("/api/ai/generate", async (req, res) => {
         messages
       });
       responseText = response.choices[0]?.message?.content || "";
-    } else if (provider === "groq") {
+    } else if (effectiveProvider === "groq") {
       const groqKey = process.env.GROQ_API_KEY;
       if (!groqKey) {
         throw new Error("Groq provider is not configured");
@@ -1611,7 +1658,7 @@ app.post("/api/ai/generate", async (req, res) => {
       requestId,
       actorUid: verifiedUser.uid,
       actorEmail: verifiedUser.email,
-      provider,
+      provider: effectiveProvider,
       model,
       responseLength: responseText.length,
       ip: clientIp,
