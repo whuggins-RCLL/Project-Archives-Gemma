@@ -51,8 +51,32 @@ export interface ApprovalCheckpoint {
   notes?: string;
 }
 
-export type AIDraftType = 'nextBestAction' | 'riskNarrative' | 'duplicateDetection';
+export type AIDraftType = 'nextBestAction' | 'riskNarrative' | 'duplicateDetection' | 'pmApproach';
 export type AIDraftApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export type ProjectManagementApproachId =
+  | 'predictive'
+  | 'adaptive'
+  | 'scrum'
+  | 'kanban'
+  | 'xp'
+  | 'hybrid'
+  | 'scrumban'
+  | 'prince2-agile'
+  | 'lean'
+  | 'cpm';
+
+export interface ProjectManagementApproach {
+  id: ProjectManagementApproachId;
+  label: string;
+  summary: string;
+  fit: 'Strong' | 'Good' | 'Caution';
+  practices: string[];
+  risks: string[];
+  notes?: string;
+  adoptedAt?: string;
+  adoptedBy?: string;
+}
 
 export interface AIDraftRecommendation {
   id: string;
@@ -84,6 +108,7 @@ export interface AIDraft {
   nextBestActions?: AIDraftRecommendation[];
   riskNarrative?: string;
   duplicateCandidates?: AIDuplicateCandidate[];
+  pmApproach?: ProjectManagementApproach;
 }
 
 export interface Project {
@@ -103,6 +128,7 @@ export interface Project {
   dependencies?: Dependency[];
   approvalCheckpoints?: ApprovalCheckpoint[];
   aiDrafts?: AIDraft[];
+  pmApproach?: ProjectManagementApproach;
   dueDate?: string;
   createdAt?: unknown;
   updatedAt?: unknown;

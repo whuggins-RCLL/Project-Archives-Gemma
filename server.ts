@@ -83,7 +83,7 @@ if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 
 const ALLOWED_PROVIDERS = new Set(["gemini", "openai", "anthropic", "gemma", "groc", "groq"]);
 const DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1";
-const AI_FEATURE_KEYS = new Set(["autoTag", "summarize", "nextBestAction", "riskNarrative"]);
+const AI_FEATURE_KEYS = new Set(["autoTag", "summarize", "nextBestAction", "riskNarrative", "pmApproach"]);
 const AI_RATE_LIMIT_WINDOW_MS = 60_000;
 const AI_RATE_LIMIT_MAX_REQUESTS = 20;
 const allowedOrigins = getAllowedCorsOrigins();
@@ -121,6 +121,7 @@ type AppSettings = {
   aiNextBestActionEnabled: boolean;
   aiRiskNarrativeEnabled: boolean;
   aiDuplicateDetectionEnabled: boolean;
+  aiPmApproachEnabled: boolean;
   aiRequireHumanApproval: boolean;
   privacyMode: "public-read" | "private-read";
   suiteName: string;
@@ -725,6 +726,7 @@ function validateSettings(input: unknown): AppSettings | null {
     typeof source.aiNextBestActionEnabled !== "boolean" ||
     typeof source.aiRiskNarrativeEnabled !== "boolean" ||
     typeof source.aiDuplicateDetectionEnabled !== "boolean" ||
+    typeof source.aiPmApproachEnabled !== "boolean" ||
     typeof source.aiRequireHumanApproval !== "boolean" ||
     typeof source.activeProvider !== "string" ||
     !ALLOWED_PROVIDERS.has(source.activeProvider) ||
@@ -761,6 +763,7 @@ function validateSettings(input: unknown): AppSettings | null {
     aiNextBestActionEnabled: source.aiNextBestActionEnabled,
     aiRiskNarrativeEnabled: source.aiRiskNarrativeEnabled,
     aiDuplicateDetectionEnabled: source.aiDuplicateDetectionEnabled,
+    aiPmApproachEnabled: source.aiPmApproachEnabled,
     aiRequireHumanApproval: source.aiRequireHumanApproval,
     privacyMode: source.privacyMode,
     suiteName: source.suiteName.trim(),
@@ -782,6 +785,7 @@ function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?
     aiNextBestActionEnabled: { booleanValue: settings.aiNextBestActionEnabled },
     aiRiskNarrativeEnabled: { booleanValue: settings.aiRiskNarrativeEnabled },
     aiDuplicateDetectionEnabled: { booleanValue: settings.aiDuplicateDetectionEnabled },
+    aiPmApproachEnabled: { booleanValue: settings.aiPmApproachEnabled },
     aiRequireHumanApproval: { booleanValue: settings.aiRequireHumanApproval },
     privacyMode: { stringValue: settings.privacyMode },
     suiteName: { stringValue: settings.suiteName },
@@ -806,6 +810,7 @@ function fromFirestoreFields(
     aiNextBestActionEnabled: fields.aiNextBestActionEnabled?.booleanValue,
     aiRiskNarrativeEnabled: fields.aiRiskNarrativeEnabled?.booleanValue,
     aiDuplicateDetectionEnabled: fields.aiDuplicateDetectionEnabled?.booleanValue,
+    aiPmApproachEnabled: fields.aiPmApproachEnabled?.booleanValue,
     aiRequireHumanApproval: fields.aiRequireHumanApproval?.booleanValue,
     privacyMode: fields.privacyMode?.stringValue as AppSettings["privacyMode"] | undefined,
     suiteName: fields.suiteName?.stringValue,
@@ -1451,6 +1456,7 @@ app.post("/api/ai/generate", async (req, res) => {
         : masterAiOn;
     const nextBestAllowed = storedSettings.aiNextBestActionEnabled === true;
     const riskAllowed = storedSettings.aiRiskNarrativeEnabled === true;
+    const pmApproachAllowed = storedSettings.aiPmApproachEnabled === true;
     if (!masterAiOn) {
       return res.status(403).json({ error: "AI features are disabled in settings." });
     }
@@ -1465,6 +1471,9 @@ app.post("/api/ai/generate", async (req, res) => {
     }
     if (feature === "riskNarrative" && !riskAllowed) {
       return res.status(403).json({ error: "Risk narrative AI is disabled in settings." });
+    }
+    if (feature === "pmApproach" && !pmApproachAllowed) {
+      return res.status(403).json({ error: "Project management approach AI is disabled in settings." });
     }
 
     if (typeof prompt !== "string" || prompt.trim().length === 0) {

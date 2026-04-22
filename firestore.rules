@@ -132,7 +132,7 @@ service cloud.firestore {
       let allowedFields = [
         'title', 'description', 'status', 'priority', 'tags', 'dueDate',
         'assignee', 'createdAt', 'updatedAt', 'code', 'owner', 'progress',
-        'department', 'preservationScore', 'riskFactor', 'aiDrafts',
+        'department', 'preservationScore', 'riskFactor', 'aiDrafts', 'pmApproach',
         'milestones', 'dependencies', 'approvalCheckpoints'
       ];
 
@@ -187,8 +187,8 @@ service cloud.firestore {
     }
 
     function isValidSettings(data) {
-      return hasRequiredFields(['aiEnabled', 'activeProvider', 'aiAutoTagEnabled', 'aiSummarizeEnabled', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor']) &&
-             hasOnlyAllowedFields(['aiEnabled', 'activeProvider', 'aiAutoTagEnabled', 'aiSummarizeEnabled', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor', 'customFooter', 'helpContactEmail']) &&
+      return hasRequiredFields(['aiEnabled', 'activeProvider', 'aiAutoTagEnabled', 'aiSummarizeEnabled', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiPmApproachEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor']) &&
+             hasOnlyAllowedFields(['aiEnabled', 'activeProvider', 'aiAutoTagEnabled', 'aiSummarizeEnabled', 'aiNextBestActionEnabled', 'aiRiskNarrativeEnabled', 'aiDuplicateDetectionEnabled', 'aiPmApproachEnabled', 'aiRequireHumanApproval', 'privacyMode', 'suiteName', 'portalName', 'logoDataUrl', 'primaryColor', 'brandDarkColor', 'customFooter', 'helpContactEmail']) &&
              data.aiEnabled is bool &&
              data.activeProvider in ['gemini', 'openai', 'anthropic', 'gemma', 'groc', 'groq'] &&
              data.aiAutoTagEnabled is bool &&
@@ -196,6 +196,7 @@ service cloud.firestore {
              data.aiNextBestActionEnabled is bool &&
              data.aiRiskNarrativeEnabled is bool &&
              data.aiDuplicateDetectionEnabled is bool &&
+             data.aiPmApproachEnabled is bool &&
              data.aiRequireHumanApproval is bool &&
              data.privacyMode in ['public-read', 'private-read'] &&
              isValidString(data.suiteName, 1, 80) &&
