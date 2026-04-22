@@ -18,6 +18,27 @@ export function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Build a user-visible message from a failed fetch (handles JSON `{ error }` and plain-text bodies e.g. Vercel). */
+async function messageFromFailedResponse(response: Response, shortLabel: string): Promise<string> {
+  const status = response.status;
+  const raw = (await response.text()).trim();
+  if (raw.startsWith("{")) {
+    try {
+      const data = JSON.parse(raw) as { error?: string };
+      if (typeof data.error === "string" && data.error.length > 0) {
+        return `${shortLabel} (HTTP ${status}): ${data.error}`;
+      }
+    } catch {
+      // fall through to plain text
+    }
+  }
+  if (raw.length > 0) {
+    const condensed = raw.replace(/\s+/g, " ").slice(0, 400);
+    return `${shortLabel} (HTTP ${status}): ${condensed}`;
+  }
+  return `${shortLabel} (HTTP ${status}).`;
+}
+
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
   if (error instanceof Error) {
     console.error('Operation error', { operationType, path, message: error.message });
@@ -251,8 +272,7 @@ export const api = {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Settings update failed');
+        throw new Error(await messageFromFailedResponse(response, "Could not save settings"));
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'settings/global');
@@ -283,12 +303,11 @@ export const api = {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'AI request failed');
+        throw new Error(await messageFromFailedResponse(response, "AI request failed"));
       }
 
-      const data = await response.json();
-      return data.text;
+      const data = await response.json() as { text?: string };
+      return data.text ?? "";
     } catch (error) {
       console.error('AI generation request failed');
       throw error;
