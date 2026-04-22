@@ -63,6 +63,7 @@ export interface Settings {
   aiNextBestActionEnabled: boolean;
   aiRiskNarrativeEnabled: boolean;
   aiDuplicateDetectionEnabled: boolean;
+  aiPmApproachEnabled: boolean;
   aiRequireHumanApproval: boolean;
   privacyMode: 'public-read' | 'private-read';
   suiteName: string;
@@ -190,6 +191,7 @@ export const api = {
           aiNextBestActionEnabled: data.aiNextBestActionEnabled ?? true,
           aiRiskNarrativeEnabled: data.aiRiskNarrativeEnabled ?? true,
           aiDuplicateDetectionEnabled: data.aiDuplicateDetectionEnabled ?? true,
+          aiPmApproachEnabled: data.aiPmApproachEnabled ?? true,
           aiRequireHumanApproval: data.aiRequireHumanApproval ?? true,
           privacyMode: data.privacyMode ?? 'public-read',
           suiteName: data.suiteName ?? 'AI Librarian Suite',
@@ -209,6 +211,7 @@ export const api = {
         aiNextBestActionEnabled: true,
         aiRiskNarrativeEnabled: true,
         aiDuplicateDetectionEnabled: true,
+        aiPmApproachEnabled: true,
         aiRequireHumanApproval: true,
         privacyMode: 'public-read',
         suiteName: 'AI Librarian Suite',
@@ -255,7 +258,7 @@ export const api = {
     provider: string,
     model: string,
     systemInstruction?: string,
-    feature?: 'autoTag' | 'summarize' | 'nextBestAction' | 'riskNarrative',
+    feature?: 'autoTag' | 'summarize' | 'nextBestAction' | 'riskNarrative' | 'pmApproach',
   ): Promise<string> => {
     try {
       const currentUser = auth.currentUser;

@@ -1,7 +1,7 @@
 import { Clock, Brain, Map, ShieldCheck, MessageSquare, Send, Link as LinkIcon, FileText, X, AlertTriangle, CheckCircle2, Trash2, Sparkles, Loader2, Plus, Paperclip, SmilePlus, MessageCircleReply, Pencil } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api, Settings } from '../lib/api';
-import { ApprovalCheckpoint, Milestone, Project, Comment, CommentAttachment, Dependency, ProjectStatus, AIDraft, AIDraftRecommendation, AIDuplicateCandidate } from '../types';
+import { ApprovalCheckpoint, Milestone, Project, Comment, CommentAttachment, Dependency, ProjectStatus, AIDraft, AIDraftRecommendation, AIDuplicateCandidate, ProjectManagementApproach, ProjectManagementApproachId } from '../types';
 import { withGovernanceDefaults } from '../lib/projectGovernance';
 import { COMMENT_REACTION_EMOJIS } from '../lib/uiDefaults';
 import { AI_MODEL_OPTIONS } from '../constants';
@@ -22,6 +22,7 @@ export default function RecordView({ projects, loading: projectsLoading, project
   const [generatingActions, setGeneratingActions] = useState(false);
   const [generatingRiskNarrative, setGeneratingRiskNarrative] = useState(false);
   const [generatingDuplicates, setGeneratingDuplicates] = useState(false);
+  const [generatingPmApproach, setGeneratingPmApproach] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
   const [addingComment, setAddingComment] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -293,6 +294,38 @@ export default function RecordView({ projects, loading: projectsLoading, project
 
   const getDefaultDraftStatus = () => settings?.aiRequireHumanApproval ? 'pending' : 'approved';
 
+  const isPmApproachId = (value: unknown): value is ProjectManagementApproachId => (
+    value === 'predictive' ||
+    value === 'adaptive' ||
+    value === 'scrum' ||
+    value === 'kanban' ||
+    value === 'xp' ||
+    value === 'hybrid' ||
+    value === 'scrumban' ||
+    value === 'prince2-agile' ||
+    value === 'lean' ||
+    value === 'cpm'
+  );
+
+  const normalizePmApproach = (raw: Partial<ProjectManagementApproach>): ProjectManagementApproach => {
+    const id = isPmApproachId(raw.id) ? raw.id : 'hybrid';
+    const label = typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : 'Hybrid';
+    const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
+    const fit = raw.fit === 'Strong' || raw.fit === 'Good' || raw.fit === 'Caution' ? raw.fit : 'Good';
+    const practices = Array.isArray(raw.practices) ? raw.practices.filter((p): p is string => typeof p === 'string' && Boolean(p.trim())).slice(0, 8) : [];
+    const risks = Array.isArray(raw.risks) ? raw.risks.filter((p): p is string => typeof p === 'string' && Boolean(p.trim())).slice(0, 8) : [];
+    const notes = typeof raw.notes === 'string' ? raw.notes.trim() : undefined;
+    return {
+      id,
+      label,
+      summary: summary || 'Summary unavailable. Please regenerate or edit.',
+      fit,
+      practices: practices.length > 0 ? practices : ['Define roles and cadence', 'Keep scope visible and prioritized'],
+      risks: risks.length > 0 ? risks : ['Misalignment on cadence and governance'],
+      ...(notes ? { notes } : {}),
+    };
+  };
+
   const overlapScore = (left: Project, right: Project): number => {
     const leftTokens = new Set(`${left.title} ${left.description}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
     const rightTokens = new Set(`${right.title} ${right.description}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
@@ -421,6 +454,85 @@ Pending approvals: ${(project.approvalCheckpoints ?? []).filter((c) => c.require
     } finally {
       setGeneratingDuplicates(false);
     }
+  };
+
+  const handleGeneratePmApproach = async () => {
+    if (!isAdmin || !project || !settings?.aiEnabled || !settings.aiPmApproachEnabled) return;
+    setGeneratingPmApproach(true);
+    try {
+      const prompt = `Return valid JSON only with schema:
+{"confidence":number,"explanation":string,"pmApproach":{"id":"predictive|adaptive|scrum|kanban|xp|hybrid|scrumban|prince2-agile|lean|cpm","label":string,"summary":string,"fit":"Strong|Good|Caution","practices":string[],"risks":string[],"notes":string}}
+Project context:
+Title: ${project.title}
+Status: ${project.status}
+Priority: ${project.priority}
+Due date: ${project.dueDate ?? 'none'}
+Progress: ${project.progress}
+Risk: ${project.riskFactor}
+Dependencies: ${(project.dependencies ?? []).map((d) => `${d.description} (${d.status})`).join('; ') || 'none'}
+Description: ${project.description}`;
+      const response = await api.generateAI(
+        prompt,
+        settings.activeProvider,
+        selectedModel,
+        'You are a PMO advisor. Choose the most appropriate project management approach and tailor it to the project. Return strict JSON only.',
+        'pmApproach',
+      );
+      const parsed = parseJsonBlock<{ confidence?: number; explanation?: string; pmApproach?: Partial<ProjectManagementApproach> }>(response, {});
+      const normalized = normalizePmApproach(parsed.pmApproach ?? {});
+      applyDraft({
+        id: `draft-${Date.now()}-pm-approach`,
+        type: 'pmApproach',
+        generatedAt: new Date().toISOString(),
+        generatedBy: api.getCurrentUserId() ?? undefined,
+        confidence: Math.max(0, Math.min(100, Math.round(parsed.confidence ?? 70))),
+        explanation: parsed.explanation ?? 'Derived from project requirements volatility, governance needs, dependencies, and delivery constraints.',
+        status: getDefaultDraftStatus(),
+        approvedAt: settings.aiRequireHumanApproval ? undefined : new Date().toISOString(),
+        approvedBy: settings.aiRequireHumanApproval ? undefined : api.getCurrentUserId() ?? undefined,
+        pmApproach: normalized,
+      });
+    } catch (error) {
+      console.error(error);
+      alert('Failed to generate project management approach.');
+    } finally {
+      setGeneratingPmApproach(false);
+    }
+  };
+
+  const updateDraftPmApproach = (draftId: string, updates: Partial<ProjectManagementApproach>) => {
+    if (!project || !isAdmin) return;
+    setProject({
+      ...project,
+      aiDrafts: (project.aiDrafts ?? []).map((draft) => {
+        if (draft.id !== draftId) return draft;
+        const current = draft.pmApproach ?? normalizePmApproach({});
+        return {
+          ...draft,
+          pmApproach: normalizePmApproach({ ...current, ...updates }),
+        };
+      }),
+    });
+  };
+
+  const adoptPmApproach = (draftId: string) => {
+    if (!project || !isAdmin) return;
+    const draft = (project.aiDrafts ?? []).find((d) => d.id === draftId);
+    if (!draft?.pmApproach) return;
+    const now = new Date().toISOString();
+    const uid = api.getCurrentUserId() ?? undefined;
+    setProject({
+      ...project,
+      pmApproach: {
+        ...draft.pmApproach,
+        adoptedAt: now,
+        adoptedBy: uid,
+      },
+    });
+    if (draft.status === 'pending') {
+      updateDraftStatus(draftId, 'approved');
+    }
+    setToast({ type: 'success', message: 'Project management approach adopted on this project.' });
   };
 
   const updateDraftStatus = (draftId: string, status: 'approved' | 'rejected') => {
@@ -790,7 +902,20 @@ Pending approvals: ${(project.approvalCheckpoints ?? []).filter((c) => c.require
                   {generatingDuplicates ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} Detect Duplicates
                 </button>
               )}
+              {settings?.aiEnabled && settings.aiPmApproachEnabled && isAdmin && (
+                <button onClick={handleGeneratePmApproach} disabled={generatingPmApproach} className="px-3 py-2 text-xs font-bold rounded-md bg-primary/10 text-primary disabled:opacity-60 flex items-center gap-2">
+                  {generatingPmApproach ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />} Recommend PM Approach
+                </button>
+              )}
             </div>
+
+            {project.pmApproach && (
+              <div className="mb-4 rounded-lg border border-outline-variant/30 bg-surface-container-low p-3">
+                <div className="text-xs font-bold uppercase tracking-wide">Adopted approach</div>
+                <div className="text-sm font-bold mt-1">{project.pmApproach.label} <span className="text-xs font-normal text-on-surface-variant">({project.pmApproach.fit})</span></div>
+                <div className="text-xs text-on-surface-variant mt-1 leading-relaxed">{project.pmApproach.summary}</div>
+              </div>
+            )}
             <div className="space-y-3">
               {(project.aiDrafts ?? []).length === 0 && (
                 <p className="text-xs text-on-surface-variant">No AI drafts yet. Generate a draft, then approve or reject before downstream use.</p>
@@ -833,6 +958,91 @@ Pending approvals: ${(project.approvalCheckpoints ?? []).filter((c) => c.require
                           <p className="text-on-surface-variant">Overlap {dup.overlapScore}% · {dup.overlapReason}</p>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {draft.pmApproach && (
+                    <div className="mt-2 bg-surface-container-lowest rounded p-2">
+                      <div className="flex flex-wrap items-center gap-2 justify-between">
+                        <div className="text-xs font-bold">Approach</div>
+                        {isAdmin && (
+                          <button
+                            onClick={() => adoptPmApproach(draft.id)}
+                            className="text-[11px] px-2 py-1 rounded bg-tertiary-fixed-variant text-white font-bold"
+                          >
+                            Adopt on project
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
+                        <div className="md:col-span-1">
+                          <label className="block text-[10px] font-bold text-on-surface-variant uppercase mb-1">Method</label>
+                          <select
+                            className="w-full bg-surface-container rounded p-2 text-xs"
+                            value={draft.pmApproach.id}
+                            disabled={!isAdmin}
+                            onChange={(e) => updateDraftPmApproach(draft.id, { id: e.target.value as ProjectManagementApproachId })}
+                          >
+                            <option value="predictive">Predictive (Traditional/Waterfall)</option>
+                            <option value="adaptive">Adaptive (Agile)</option>
+                            <option value="scrum">Scrum</option>
+                            <option value="kanban">Kanban</option>
+                            <option value="xp">Extreme Programming (XP)</option>
+                            <option value="hybrid">Hybrid</option>
+                            <option value="scrumban">Scrumban</option>
+                            <option value="prince2-agile">PRINCE2 Agile</option>
+                            <option value="lean">Lean</option>
+                            <option value="cpm">Critical Path Method (CPM)</option>
+                          </select>
+                          <label className="block text-[10px] font-bold text-on-surface-variant uppercase mt-2 mb-1">Fit</label>
+                          <select
+                            className="w-full bg-surface-container rounded p-2 text-xs"
+                            value={draft.pmApproach.fit}
+                            disabled={!isAdmin}
+                            onChange={(e) => updateDraftPmApproach(draft.id, { fit: e.target.value as ProjectManagementApproach['fit'] })}
+                          >
+                            <option value="Strong">Strong</option>
+                            <option value="Good">Good</option>
+                            <option value="Caution">Caution</option>
+                          </select>
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-bold text-on-surface-variant uppercase mb-1">Summary</label>
+                          <textarea
+                            className="w-full bg-surface-container rounded p-2 text-xs min-h-[76px]"
+                            value={draft.pmApproach.summary}
+                            disabled={!isAdmin}
+                            onChange={(e) => updateDraftPmApproach(draft.id, { summary: e.target.value })}
+                          />
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+                            <div>
+                              <label className="block text-[10px] font-bold text-on-surface-variant uppercase mb-1">Practices (comma-separated)</label>
+                              <input
+                                className="w-full bg-surface-container rounded p-2 text-xs"
+                                value={(draft.pmApproach.practices ?? []).join(', ')}
+                                disabled={!isAdmin}
+                                onChange={(e) => updateDraftPmApproach(draft.id, { practices: e.target.value.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 8) })}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-on-surface-variant uppercase mb-1">Risks (comma-separated)</label>
+                              <input
+                                className="w-full bg-surface-container rounded p-2 text-xs"
+                                value={(draft.pmApproach.risks ?? []).join(', ')}
+                                disabled={!isAdmin}
+                                onChange={(e) => updateDraftPmApproach(draft.id, { risks: e.target.value.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 8) })}
+                              />
+                            </div>
+                          </div>
+                          <label className="block text-[10px] font-bold text-on-surface-variant uppercase mt-2 mb-1">Notes (optional)</label>
+                          <input
+                            className="w-full bg-surface-container rounded p-2 text-xs"
+                            value={draft.pmApproach.notes ?? ''}
+                            disabled={!isAdmin}
+                            onChange={(e) => updateDraftPmApproach(draft.id, { notes: e.target.value })}
+                          />
+                        </div>
+                      </div>
                     </div>
                   )}
 

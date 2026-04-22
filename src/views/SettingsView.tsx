@@ -25,6 +25,7 @@ export default function SettingsView({
     aiNextBestActionEnabled: true,
     aiRiskNarrativeEnabled: true,
     aiDuplicateDetectionEnabled: true,
+    aiPmApproachEnabled: true,
     aiRequireHumanApproval: true,
     privacyMode: 'public-read',
     suiteName: 'AI Librarian Suite',
@@ -416,6 +417,7 @@ export default function SettingsView({
               { key: 'aiNextBestActionEnabled', title: 'Next-best action suggestions', desc: 'Generate prioritized recommendations for project owners.' },
               { key: 'aiRiskNarrativeEnabled', title: 'Risk narrative drafts', desc: 'Draft board-ready risk narratives with mitigations.' },
               { key: 'aiDuplicateDetectionEnabled', title: 'Duplicate-project detection', desc: 'Surface overlap candidates before duplicate work begins.' },
+              { key: 'aiPmApproachEnabled', title: 'Project management approach selector', desc: 'Recommend an approach (Agile/Scrum/Kanban/Hybrid/CPM, etc.) with human adoption controls.' },
               { key: 'aiRequireHumanApproval', title: 'Human approval required', desc: 'AI outputs stay in pending state until explicitly approved.' }
             ].map((feature) => (
               <div key={feature.key} className="flex items-center justify-between bg-surface-container-low rounded-lg p-3">

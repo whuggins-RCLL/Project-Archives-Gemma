@@ -172,6 +172,10 @@
           "type": "boolean",
           "description": "Enable duplicate project detection drafts."
         },
+        "aiPmApproachEnabled": {
+          "type": "boolean",
+          "description": "Enable AI-assisted project management approach selection."
+        },
         "aiRequireHumanApproval": {
           "type": "boolean",
           "description": "Require explicit human approval for AI drafts."

@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS: Settings = {
   aiNextBestActionEnabled: true,
   aiRiskNarrativeEnabled: true,
   aiDuplicateDetectionEnabled: true,
+  aiPmApproachEnabled: true,
   aiRequireHumanApproval: true,
   privacyMode: 'public-read',
   suiteName: APP_CONFIG.appName,
