@@ -95,7 +95,7 @@ const ADMIN_OPERATIONS_RATE_LIMIT_MAX_REQUESTS = 6;
 /** Must fit a max-size logoDataUrl (~150k) plus other fields; was 8kb and caused 500s on save (entity too large). */
 const ADMIN_SETTINGS_MAX_BODY_BYTES = 320 * 1024;
 const ADMIN_OPERATIONS_MAX_BODY_BYTES = 2 * 1024;
-const ADMIN_SETTINGS_TIMEOUT_MS = 8_000;
+const ADMIN_SETTINGS_TIMEOUT_MS = 20_000;
 const ADMIN_OPERATIONS_TIMEOUT_MS = 15_000;
 const MAX_PROMPT_LENGTH = 4_000;
 const MAX_SYSTEM_INSTRUCTION_LENGTH = 2_000;
@@ -326,40 +326,46 @@ async function checkRateLimitDistributed(
   options: { maxRequests: number; windowMs: number; namespace: string },
 ): Promise<{ allowed: boolean; retryAfterSeconds: number }> {
   const { maxRequests, windowMs, namespace } = options;
-  if (!hasUpstash) {
-    return {
-      allowed: checkRateLimit(`${namespace}:${key}`, maxRequests, windowMs),
-      retryAfterSeconds: Math.ceil(windowMs / 1000),
-    };
-  }
-
-  const windowSeconds = Math.ceil(windowMs / 1000);
-  const windowStart = Math.floor(Date.now() / windowMs);
-  const redisKey = `${namespace}:${key}:${windowStart}`;
-  const incrResponse = await fetch(`${upstashRestUrl}/incr/${encodeURIComponent(redisKey)}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${upstashRestToken}` },
+  const inMemory = (): { allowed: boolean; retryAfterSeconds: number } => ({
+    allowed: checkRateLimit(`${namespace}:${key}`, maxRequests, windowMs),
+    retryAfterSeconds: Math.ceil(windowMs / 1000),
   });
-  if (!incrResponse.ok) {
-    throw new Error("Upstash rate limit increment failed");
+  if (!hasUpstash) {
+    return inMemory();
   }
-  const incrData = (await safeJson(incrResponse)) as { result?: number };
-  const requestCount = Number(incrData.result ?? 0);
 
-  if (requestCount === 1) {
-    const expireResponse = await fetch(`${upstashRestUrl}/expire/${encodeURIComponent(redisKey)}/${windowSeconds}`, {
+  try {
+    const windowSeconds = Math.ceil(windowMs / 1000);
+    const windowStart = Math.floor(Date.now() / windowMs);
+    const redisKey = `${namespace}:${key}:${windowStart}`;
+    const incrResponse = await fetch(`${upstashRestUrl}/incr/${encodeURIComponent(redisKey)}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${upstashRestToken}` },
     });
-    if (!expireResponse.ok) {
-      throw new Error("Upstash rate limit expiration failed");
+    if (!incrResponse.ok) {
+      throw new Error("Upstash rate limit increment failed");
     }
-  }
+    const incrData = (await safeJson(incrResponse)) as { result?: number };
+    const requestCount = Number(incrData.result ?? 0);
 
-  return {
-    allowed: requestCount <= maxRequests,
-    retryAfterSeconds: windowSeconds,
-  };
+    if (requestCount === 1) {
+      const expireResponse = await fetch(`${upstashRestUrl}/expire/${encodeURIComponent(redisKey)}/${windowSeconds}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${upstashRestToken}` },
+      });
+      if (!expireResponse.ok) {
+        throw new Error("Upstash rate limit expiration failed");
+      }
+    }
+
+    return {
+      allowed: requestCount <= maxRequests,
+      retryAfterSeconds: windowSeconds,
+    };
+  } catch (err) {
+    console.error("Upstash distributed rate limit failed; using in-memory limiter:", err);
+    return inMemory();
+  }
 }
 
 function enforceRequestSizeLimit(req: express.Request, maxBytes: number): boolean {
@@ -955,6 +961,14 @@ async function fetchFirestoreSettings(): Promise<Partial<AppSettings>> {
   }
 }
 
+function firestoreResponseMeansDocumentMissing(status: number, data: { error?: { status?: string; code?: number } }): boolean {
+  if (status === 404) return true;
+  if (data.error?.status === "NOT_FOUND") return true;
+  if (data.error?.code === 5) return true; // gRPC NOT_FOUND
+  if (data.error?.code === 404) return true; // some REST error shapes
+  return false;
+}
+
 /** Commit settings: PATCH existing doc, or create `settings/global` if missing (first deploy / empty project). */
 async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
   const token = await getGoogleAccessToken("https://www.googleapis.com/auth/datastore");
@@ -967,17 +981,24 @@ async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ fields }),
   });
-  if (response.status === 404) {
+  let data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
+
+  if (!response.ok && firestoreResponseMeansDocumentMissing(response.status, data)) {
     const createUrl = `${base}/settings?documentId=global`;
     response = await fetch(createUrl, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ fields }),
     });
+    data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
   }
-  const data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string } };
+
   if (!response.ok) {
-    throw new Error(data.error?.message || "Firestore write failed for global settings");
+    const msg = data.error?.message || "Firestore write failed for global settings";
+    throw new Error(
+      `Saving settings to Firestore failed: ${msg}. ` +
+        "Confirm Vercel has FIREBASE_SERVICE_ACCOUNT_JSON and IAM permission on Cloud Firestore data.",
+    );
   }
 }
 
@@ -1739,12 +1760,30 @@ app.post("/api/admin/settings", async (req, res) => {
     if (error instanceof Error && error.message === "Settings request timed out") {
       return res.status(408).json({ error: "Settings request timed out. Please retry." });
     }
+    const detail = error instanceof Error ? error.message : "Unknown server error";
     auditLog("admin_settings_update_failed", {
       requestId,
-      message: error instanceof Error ? error.message : "Unknown server error",
+      message: detail,
       ip: clientIp,
     }, "error");
-    res.status(500).json({ error: "Unable to save settings right now. Please try again later." });
+    const isCredential =
+      /credentials|FIREBASE_SERVICE_ACCOUNT|not configured|access token|Permission denied|403|invalid_grant/i.test(
+        detail,
+      );
+    const isPayload = /entity\.too\.large|too large|413/i.test(detail);
+    const isTimeout = /ETIMEDOUT|timeout|aborted|ECONNRESET|socket/i.test(detail);
+    if (isCredential) {
+      return res.status(503).json({
+        error: `${detail} If this is production, set FIREBASE_SERVICE_ACCOUNT_JSON in Vercel and redeploy.`,
+      });
+    }
+    if (isPayload) {
+      return res.status(413).json({ error: detail });
+    }
+    if (isTimeout) {
+      return res.status(503).json({ error: "Saving settings took too long. Check Firestore/Vercel and try again." });
+    }
+    return res.status(500).json({ error: detail });
   }
 });
 
