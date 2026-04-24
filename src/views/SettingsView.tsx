@@ -8,12 +8,16 @@ export default function SettingsView({
   canViewSettings,
   loadingRole,
   onRoleRefreshRequested,
+  refreshingRole = false,
+  roleError = null,
   onSettingsUpdated,
 }: {
   canManageSettings: boolean,
   canViewSettings: boolean,
   loadingRole: boolean,
   onRoleRefreshRequested?: () => Promise<void>,
+  refreshingRole?: boolean,
+  roleError?: string | null,
   onSettingsUpdated?: (settings: Settings) => void,
 }) {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -34,8 +38,10 @@ export default function SettingsView({
     logoDataUrl: '',
     primaryColor: '#002045',
     brandDarkColor: '#1A365D',
+    themePreference: 'system',
   });
   const [loading, setLoading] = useState(true);
+  const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [bootstrapStatus, setBootstrapStatus] = useState<{ ownerCount: number; configured: boolean; eligible: boolean } | null>(null);
   const [claimingOwner, setClaimingOwner] = useState(false);
@@ -47,9 +53,12 @@ export default function SettingsView({
       try {
         const data = await api.getSettings();
         setSettings(data);
+        setSettingsLoadFailed(false);
         onSettingsUpdated?.(data);
       } catch (error) {
         console.error('Failed to fetch settings');
+        setSettingsLoadFailed(true);
+        setToast({ type: 'error', message: 'Unable to load saved settings right now. Save is disabled to prevent overwriting existing values.' });
       } finally {
         setLoading(false);
       }
@@ -78,6 +87,11 @@ export default function SettingsView({
       setSaving(false);
       return;
     }
+    if (settingsLoadFailed) {
+      setToast({ type: 'error', message: 'Cannot save because current settings failed to load. Please refresh and try again.' });
+      setSaving(false);
+      return;
+    }
     try {
       await api.updateSettings(settings);
       onSettingsUpdated?.(settings);
@@ -101,7 +115,7 @@ export default function SettingsView({
 
   useEffect(() => {
     onSettingsUpdated?.(settings);
-  }, [settings.primaryColor, settings.brandDarkColor, settings.portalName, settings.suiteName, settings.logoDataUrl]);
+  }, [settings.primaryColor, settings.brandDarkColor, settings.portalName, settings.suiteName, settings.logoDataUrl, settings.themePreference]);
 
   if (loading || loadingRole) return <div className="p-10">Loading settings...</div>;
 
@@ -267,6 +281,21 @@ export default function SettingsView({
                 />
               </div>
               <div>
+                <label htmlFor="settings-theme-preference" className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Theme preference</label>
+                <select
+                  id="settings-theme-preference"
+                  className="w-full bg-surface-container-low border border-outline-variant/20 rounded-lg p-2 text-sm"
+                  value={settings.themePreference ?? 'system'}
+                  disabled={readOnly}
+                  onChange={(e) => setSettings({ ...settings, themePreference: e.target.value as Settings['themePreference'] })}
+                >
+                  <option value="system">System default</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+                <p className="text-xs text-on-surface-variant mt-1.5">Applies the app theme while preserving readable contrast in both modes.</p>
+              </div>
+              <div>
                 <label htmlFor="settings-brand-dark-color" className="block text-xs font-bold text-on-surface-variant uppercase mb-2">Dark Brand Color</label>
                 <input
                   id="settings-brand-dark-color"
@@ -338,6 +367,22 @@ export default function SettingsView({
               />
               <p className="text-xs text-on-surface-variant mt-1">Shown to users who need support. Leave blank to hide.</p>
             </div>
+          </div>
+
+          <div className="rounded-lg border border-outline-variant/20 bg-surface-container-low p-4">
+            <h3 className="font-bold text-on-surface mb-1">Admin role and claim tools</h3>
+            <p className="text-xs text-on-surface-variant mb-3">
+              If your role has changed recently, refresh permission claims before trying sensitive actions.
+            </p>
+            <button
+              type="button"
+              onClick={() => void onRoleRefreshRequested?.()}
+              disabled={!onRoleRefreshRequested || refreshingRole}
+              className="text-xs px-3 py-2 border border-outline-variant/30 rounded-md hover:bg-surface-container-high disabled:opacity-60"
+            >
+              {refreshingRole ? 'Refreshing permissions…' : 'Refresh permissions'}
+            </button>
+            {roleError && <p className="text-[11px] text-error mt-2">{roleError}</p>}
           </div>
 
           {/* AI master toggle */}
@@ -475,11 +520,11 @@ export default function SettingsView({
         <div className="p-6 bg-surface-container-low border-t border-outline-variant/10 flex justify-end">
           <button
             onClick={handleSave}
-            disabled={saving || readOnly}
+            disabled={saving || readOnly || settingsLoadFailed}
             className="flex items-center gap-2 px-6 py-2.5 bg-primary text-white font-bold rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-70"
           >
             <Save className="w-4 h-4" />
-            {saving ? 'Saving...' : readOnly ? 'View Only' : 'Save Settings'}
+            {saving ? 'Saving...' : readOnly ? 'View Only' : settingsLoadFailed ? 'Load Failed' : 'Save Settings'}
           </button>
         </div>
       </div>

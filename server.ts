@@ -131,6 +131,7 @@ type AppSettings = {
   logoDataUrl: string;
   primaryColor: string;
   brandDarkColor: string;
+  themePreference?: "system" | "light" | "dark";
   customFooter?: string;
   helpContactEmail?: string;
 };
@@ -798,6 +799,7 @@ function validateSettings(input: unknown): AppSettings | null {
     !source.primaryColor.match(/^#[0-9A-Fa-f]{6}$/) ||
     typeof source.brandDarkColor !== "string" ||
     !source.brandDarkColor.match(/^#[0-9A-Fa-f]{6}$/) ||
+    (source.themePreference !== undefined && source.themePreference !== "system" && source.themePreference !== "light" && source.themePreference !== "dark") ||
     (source.customFooter !== undefined && (typeof source.customFooter !== "string" || source.customFooter.length > 500)) ||
     (source.helpContactEmail !== undefined && (typeof source.helpContactEmail !== "string" || source.helpContactEmail.length > 254))
   ) {
@@ -827,6 +829,7 @@ function validateSettings(input: unknown): AppSettings | null {
     logoDataUrl: source.logoDataUrl,
     primaryColor: source.primaryColor,
     brandDarkColor: source.brandDarkColor,
+    themePreference: source.themePreference === "light" || source.themePreference === "dark" ? source.themePreference : "system",
     customFooter: typeof source.customFooter === "string" ? source.customFooter.trim() : undefined,
     helpContactEmail: typeof source.helpContactEmail === "string" ? source.helpContactEmail.trim() : undefined,
   };
@@ -850,6 +853,7 @@ function toFirestoreFields(settings: AppSettings): Record<string, { stringValue?
     logoDataUrl: { stringValue: settings.logoDataUrl },
     primaryColor: { stringValue: settings.primaryColor },
     brandDarkColor: { stringValue: settings.brandDarkColor },
+    ...(settings.themePreference !== undefined && { themePreference: { stringValue: settings.themePreference } }),
     ...(settings.customFooter !== undefined && { customFooter: { stringValue: settings.customFooter } }),
     ...(settings.helpContactEmail !== undefined && { helpContactEmail: { stringValue: settings.helpContactEmail } }),
   };
@@ -878,6 +882,7 @@ function fromFirestoreFields(
     logoDataUrl: fields.logoDataUrl?.stringValue,
     primaryColor: fields.primaryColor?.stringValue,
     brandDarkColor: fields.brandDarkColor?.stringValue,
+    themePreference: fields.themePreference?.stringValue as AppSettings["themePreference"] | undefined,
     customFooter: fields.customFooter?.stringValue,
     helpContactEmail: fields.helpContactEmail?.stringValue,
   };
@@ -1037,25 +1042,52 @@ function firestoreResponseMeansDocumentMissing(status: number, data: { error?: {
 async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
   const token = await getGoogleAccessToken("https://www.googleapis.com/auth/datastore");
   const projectId = getFirebaseProjectId();
-  const fields = toFirestoreFields(settings);
+  const nextFields = toFirestoreFields(settings);
   const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
   const globalPath = "settings/global";
-  let response = await fetch(`${base}/${globalPath}`, {
-    method: "PATCH",
+  const globalUrl = `${base}/${globalPath}`;
+  const readResponse = await fetch(globalUrl, {
+    method: "GET",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ fields }),
   });
-  let data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
+  const readData = (await readResponse.json().catch(() => ({}))) as {
+    fields?: Record<string, Record<string, unknown>>;
+    error?: { message?: string; status?: string; code?: number };
+  };
 
-  if (!response.ok && firestoreResponseMeansDocumentMissing(response.status, data)) {
+  if (!readResponse.ok && firestoreResponseMeansDocumentMissing(readResponse.status, readData)) {
     const createUrl = `${base}/settings?documentId=global`;
-    response = await fetch(createUrl, {
+    const response = await fetch(createUrl, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ fields }),
+      body: JSON.stringify({ fields: nextFields }),
     });
-    data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
+    const data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
+    if (!response.ok) {
+      const msg = data.error?.message || "Firestore write failed for global settings";
+      throw new Error(
+        `Saving settings to Firestore failed: ${msg}. ` +
+          "Confirm Vercel has FIREBASE_SERVICE_ACCOUNT_JSON and IAM permission on Cloud Firestore data.",
+      );
+    }
+    return;
   }
+
+  if (!readResponse.ok) {
+    const msg = readData.error?.message || "Firestore read failed for global settings";
+    throw new Error(
+      `Saving settings to Firestore failed: ${msg}. ` +
+        "Confirm Vercel has FIREBASE_SERVICE_ACCOUNT_JSON and IAM permission on Cloud Firestore data.",
+    );
+  }
+
+  const mergedFields = { ...(readData.fields || {}), ...nextFields };
+  const response = await fetch(globalUrl, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields: mergedFields }),
+  });
+  const data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
 
   if (!response.ok) {
     const msg = data.error?.message || "Firestore write failed for global settings";
