@@ -855,6 +855,36 @@ function getFirebaseProjectId(): string {
   return value;
 }
 
+
+function decodeTokenAudience(idToken: string): string | null {
+  const parts = idToken.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { aud?: unknown };
+    return typeof payload.aud === "string" && payload.aud.trim().length > 0 ? payload.aud : null;
+  } catch {
+    return null;
+  }
+}
+
+function ensureFirebaseProjectAlignment(idToken: string): { ok: true } | { ok: false; error: string } {
+  const tokenAudience = decodeTokenAudience(idToken);
+  if (!tokenAudience) {
+    return { ok: false, error: "Unable to determine Firebase project from auth token. Please sign out and sign in again." };
+  }
+
+  const expectedProjectId = getFirebaseProjectId();
+  if (tokenAudience !== expectedProjectId) {
+    return {
+      ok: false,
+      error:
+        `Firebase project mismatch detected (token project: ${tokenAudience}, server project: ${expectedProjectId}). ` +
+        "This can make users appear new and settings appear missing. Update VITE_FIREBASE_PROJECT_ID / FIREBASE_PROJECT_ID / FIREBASE_SERVICE_ACCOUNT_JSON to the same project.",
+    };
+  }
+
+  return { ok: true };
+}
 function getServiceAccount(): { clientEmail: string; privateKey: string } {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is required for role administration");
@@ -1710,6 +1740,10 @@ app.post("/api/admin/settings", async (req, res) => {
     const verifiedUser = await verifyFirebaseUser(token);
     if (!verifiedUser) {
       return res.status(401).json({ error: "Invalid or expired auth token" });
+    }
+    const projectAlignment = ensureFirebaseProjectAlignment(token);
+    if (projectAlignment.ok === false) {
+      return res.status(409).json({ error: projectAlignment.error });
     }
     const adminGate = await requireCanManageGlobalSettings(verifiedUser);
     if (adminGate.ok === false) {
