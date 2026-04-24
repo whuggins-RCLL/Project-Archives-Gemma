@@ -889,6 +889,14 @@ function getFirebaseProjectId(): string {
   return value;
 }
 
+function getFirestoreDatabasePathSegment(): string {
+  const configuredDatabaseId = (process.env.FIREBASE_DATABASE_ID || process.env.VITE_FIREBASE_DATABASE_ID || "").trim();
+  if (!configuredDatabaseId || configuredDatabaseId === "(default)" || configuredDatabaseId === "default") {
+    return "(default)";
+  }
+  return configuredDatabaseId;
+}
+
 
 function decodeTokenAudience(idToken: string): string | null {
   const parts = idToken.split(".");
@@ -1003,7 +1011,8 @@ async function identityToolkitCall(path: string, body: Record<string, unknown>):
 async function firestoreCall(path: string, options: { method?: string; body?: unknown } = {}): Promise<Record<string, unknown>> {
   const token = await getGoogleAccessToken("https://www.googleapis.com/auth/datastore");
   const projectId = getFirebaseProjectId();
-  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`, {
+  const databasePath = getFirestoreDatabasePathSegment();
+  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databasePath}/documents/${path}`, {
     method: options.method || "GET",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1037,8 +1046,9 @@ function firestoreResponseMeansDocumentMissing(status: number, data: { error?: {
 async function saveFirestoreSettings(settings: AppSettings): Promise<void> {
   const token = await getGoogleAccessToken("https://www.googleapis.com/auth/datastore");
   const projectId = getFirebaseProjectId();
+  const databasePath = getFirestoreDatabasePathSegment();
   const fields = toFirestoreFields(settings);
-  const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
+  const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databasePath}/documents`;
   const globalPath = "settings/global";
   let response = await fetch(`${base}/${globalPath}`, {
     method: "PATCH",
@@ -1207,15 +1217,33 @@ async function getElevatedAccessConfig(): Promise<{ passwordHash: string; needsC
 }
 
 async function saveElevatedAccessConfig(config: { passwordHash: string; needsChange: boolean }): Promise<void> {
-  await firestoreCall("settings/global", {
+  const token = await getGoogleAccessToken("https://www.googleapis.com/auth/datastore");
+  const projectId = getFirebaseProjectId();
+  const databasePath = getFirestoreDatabasePathSegment();
+  const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databasePath}/documents`;
+  const fields = {
+    elevatedPasswordHash: { stringValue: config.passwordHash },
+    elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
+  };
+  let response = await fetch(`${base}/settings/global`, {
     method: "PATCH",
-    body: {
-      fields: {
-        elevatedPasswordHash: { stringValue: config.passwordHash },
-        elevatedPasswordNeedsChange: { booleanValue: config.needsChange },
-      },
-    },
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
   });
+  let data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
+
+  if (!response.ok && firestoreResponseMeansDocumentMissing(response.status, data)) {
+    response = await fetch(`${base}/settings?documentId=global`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ fields }),
+    });
+    data = (await response.json().catch(() => ({}))) as { error?: { message?: string; status?: string; code?: number } };
+  }
+
+  if (!response.ok) {
+    throw new Error(data.error?.message || "Unable to save elevated access configuration");
+  }
 }
 
 async function resolveEffectiveRole(verifiedUser: VerifiedUser): Promise<AppRole> {
