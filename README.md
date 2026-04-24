@@ -199,6 +199,51 @@ Because this project includes an Express server (`server.ts`) for secure AI/prov
 
 **Important Post-Deployment Step:** Once Vercel provides your live production URL (for example `https://your-app.vercel.app`), add this domain to Firebase Authentication **Authorized domains** (Authentication → Settings → Authorized domains) so Google Sign-In works correctly.
 
+### Preventing builds/deploys from resetting persistent data
+
+If deploys seem to "wipe memory," the root cause is usually data being kept in process memory, wrong environment variables, or build scripts that overwrite live documents.
+
+Use this hardening checklist:
+
+1. **Keep durable state in Firestore (or Redis), not Node process memory**
+   - This project already persists global settings in `settings/global` through admin APIs.
+   - Any runtime `Map`/in-memory cache should be treated as **ephemeral** and safe to lose after each cold start/deploy.
+2. **Configure distributed rate limiting in production**
+   - Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+   - Without these, production falls back to per-instance in-memory limits that reset on deploy and are inconsistent across instances.
+3. **Never write default settings during `npm run build`**
+   - Build steps should compile assets only.
+   - Seed/migration scripts must run as explicit one-off commands (not inside `build`, `postbuild`, or `start`).
+4. **Pin production to the correct Firebase project/database**
+   - Verify Vercel env vars: `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_DATABASE_ID`, and server credentials (`FIREBASE_SERVICE_ACCOUNT_JSON`) all point to the same production project.
+   - A wrong project ID can look like "memory loss" because the app reads a different database.
+5. **Protect settings from accidental overwrite**
+   - Restrict settings writes to privileged users only (owner/admin), enforced by claims + Firestore rules.
+   - Prefer partial updates/migrations for new fields rather than replacing the entire settings object with defaults.
+6. **Add backup/restore before release**
+   - Schedule Firestore exports (or equivalent backup process) before major releases.
+   - Keep rollback runbooks so data can be restored quickly if a deploy script mutates production docs.
+
+Quick pre-release check:
+
+```bash
+echo "NODE_ENV=$NODE_ENV"
+echo "VITE_FIREBASE_PROJECT_ID=$VITE_FIREBASE_PROJECT_ID"
+echo "VITE_FIREBASE_DATABASE_ID=$VITE_FIREBASE_DATABASE_ID"
+node -e "console.log('Has FIREBASE_SERVICE_ACCOUNT_JSON:', !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON)"
+```
+
+CI guard (automated on pull requests and pushes to `main`):
+
+```bash
+npm run ci:guard
+```
+
+This guard fails if:
+- build/start lifecycle scripts contain risky data-mutation commands (seed/migrate/reset/wipe),
+- `.env.example` is missing required production keys,
+- or (when `CI_GUARD_STRICT=1`) Firebase production env values are missing/mismatched.
+
 ## AI Features & Secure API Key Handling
 
 The Digital Archivist includes optional AI features (Auto-Tagging, Summarization, Next-best Actions, Risk Narrative Drafting, and Duplicate Detection) that can be powered by Google Gemini, OpenAI, Anthropic Claude, Groq, or any OpenAI-compatible endpoint (Gemma slot, Groc slot).
