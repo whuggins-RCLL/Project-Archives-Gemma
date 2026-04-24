@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "ci:guard": "node scripts/ci-guard-persistent-state.mjs",
     "audit:deps": "node scripts/run-npm-audit.mjs",
     "grant:owner": "node scripts/grant-owner-by-email.mjs"
   },
