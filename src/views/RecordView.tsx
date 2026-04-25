@@ -85,12 +85,12 @@ export default function RecordView({ projects, loading: projectsLoading, project
     if (!project) return;
     setSavingProject(true);
     try {
+      const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...editableFields } = project;
+      const payload: Partial<Project> = { ...editableFields };
       if (settings?.privacyMode === 'public-read' && (project.aiDrafts?.length ?? 0) > 0) {
-        const { aiDrafts: _omittedDrafts, ...projectWithoutDrafts } = project;
-        await api.updateProject(project.id, projectWithoutDrafts);
-      } else {
-        await api.updateProject(project.id, project);
+        delete payload.aiDrafts;
       }
+      await api.updateProject(project.id, payload);
       setToast({ type: 'success', message: 'Project saved successfully.' });
       onBack();
     } catch (error) {
