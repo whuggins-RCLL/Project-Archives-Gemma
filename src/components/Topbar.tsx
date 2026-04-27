@@ -2,7 +2,6 @@ import { Search, Settings, LogOut, Compass } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-import { APP_CONFIG } from '../config';
 
 export default function Topbar({
   roleLabel,
@@ -45,17 +44,6 @@ export default function Topbar({
   return (
     <header className="bg-white/85 backdrop-blur-xl sticky top-0 z-30 flex justify-between items-center w-full px-10 h-16 shadow-[0_8px_32px_rgba(25,28,30,0.06)]">
       <div className="flex items-center space-x-8 min-w-0">
-        <div className="min-w-0 hidden sm:block max-w-[min(22rem,40vw)]">
-          <p className="font-headline text-lg sm:text-xl font-bold text-brand-dark tracking-tight truncate" title={branding.portalName || APP_CONFIG.portalName}>
-            {branding.portalName || APP_CONFIG.portalName}
-          </p>
-          <p className="text-[11px] text-on-surface-variant truncate mt-0.5" title={branding.suiteName || APP_CONFIG.appName}>
-            {branding.suiteName || APP_CONFIG.appName}
-          </p>
-        </div>
-        <p className="sm:hidden font-headline text-lg font-bold text-brand-dark truncate max-w-[42vw]" title={branding.portalName || APP_CONFIG.portalName}>
-          {branding.portalName || APP_CONFIG.portalName}
-        </p>
         <div className="relative md:hidden">
           <label htmlFor="topbar-search-mobile" className="sr-only">Search</label>
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant w-4 h-4" />
