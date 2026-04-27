@@ -82,6 +82,17 @@ function InternalApp() {
   }, [completedTourStorageKey, dismissedTourStorageKey, rawRole]);
 
   useEffect(() => {
+    if (rawRole !== 'collaborator') {
+      setIsSiteTourOpen(false);
+      return;
+    }
+
+    const hasCompletedTour = window.localStorage.getItem(SITE_TOUR_COMPLETED_KEY) === 'true';
+    const hasDismissedTour = window.localStorage.getItem(SITE_TOUR_DISMISSED_KEY) === 'true';
+    setIsSiteTourOpen(!hasCompletedTour && !hasDismissedTour);
+  }, [rawRole]);
+
+  useEffect(() => {
     if (!isBrandingHydrated) return;
     applyBrandingToDocument(settings);
   }, [isBrandingHydrated, settings.primaryColor, settings.brandDarkColor]);
