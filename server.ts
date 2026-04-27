@@ -2010,7 +2010,7 @@ app.get("/api/admin/users/list", async (req, res) => {
 
     const result = await firestoreCall("users?pageSize=500");
     const documents = (result.documents as Array<{ name?: string; fields?: Record<string, Record<string, unknown>> }> | undefined) || [];
-    const users = documents.map((doc) => {
+    const mirroredUsers = documents.map((doc) => {
       const parsed = parseFirestoreDocument(doc as { name?: string; fields?: Record<string, Record<string, unknown>> });
       return {
         uid: parsed.id,
@@ -2025,6 +2025,32 @@ app.get("/api/admin/users/list", async (req, res) => {
         lastRoleChangedBy: typeof parsed.lastRoleChangedBy === "string" ? parsed.lastRoleChangedBy : undefined,
       };
     });
+
+    const usersByUid = new Map(mirroredUsers.map((user) => [user.uid, user]));
+    if (adminAuth) {
+      let pageToken: string | undefined = undefined;
+      do {
+        const page = await adminAuth.listUsers(1000, pageToken);
+        for (const authUser of page.users) {
+          if (usersByUid.has(authUser.uid)) continue;
+          usersByUid.set(authUser.uid, {
+            uid: authUser.uid,
+            email: authUser.email || "",
+            displayName: authUser.displayName || "",
+            role: "viewer",
+            permissions: defaultPermissionsForRole("viewer"),
+            status: authUser.disabled ? "disabled" : "active",
+            createdAt: authUser.metadata.creationTime || undefined,
+            updatedAt: authUser.metadata.lastRefreshTime || authUser.metadata.lastSignInTime || undefined,
+            lastRoleChangedAt: undefined,
+            lastRoleChangedBy: undefined,
+          });
+        }
+        pageToken = page.pageToken;
+      } while (pageToken);
+    }
+
+    const users = Array.from(usersByUid.values()).sort((a, b) => a.email.localeCompare(b.email));
     return res.json({ users });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to list users" });
