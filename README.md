@@ -17,7 +17,7 @@ The Digital Archivist is a comprehensive Kanban and Portfolio management tool de
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, Lucide React (Icons)
 - **Routing**: React Router v7
 - **Backend & Auth**: Firebase (Firestore, Authentication, Storage)
-- **Deployment**: Google Cloud Run / Firebase Hosting
+- **Deployment**: Vercel (primary) or Google Cloud Run (forked option via Gemini Enterprise Agent Platform, formerly Vertex)
 
 ## Setup Instructions
 
@@ -53,11 +53,36 @@ cd Project-Archives
 4. Go to the **Rules** tab and paste the contents of the `firestore.rules` file from this repository.
 5. Click **Publish**.
 
-### 5. Add Environment Variables
+### 5. Configure Firestore Composite Indexes (Required for Chat)
 
-Create a file named `.env` in the root of the project and paste your Firebase configuration:
+The collaboration/chat thread uses indexed queries on the `comments` collection (ordered by `projectId` + `timestamp`).  
+If this index is missing, chat requests can fail with a Firestore index error.
+
+1. Install Firebase CLI (if needed): `npm i -g firebase-tools`
+2. Authenticate and select your project:
+   ```bash
+   firebase login
+   firebase use <your-firebase-project-id>
+   ```
+3. Deploy indexes from this repository:
+   ```bash
+   firebase deploy --only firestore:indexes
+   ```
+4. Confirm in Firebase Console → Firestore Database → **Indexes** that the `comments` composite index is enabled.
+
+> Source of truth: `firestore.indexes.json`.
+
+### 6. Add Environment Variables
+
+Create a file named `.env` in the root of the project.  
+For Vercel, add the same values in **Project Settings → Environment Variables**.
 
 ```env
+# Core runtime
+NODE_ENV=production
+APP_URL=https://your-deployment-url
+
+# Firebase web config (client + server runtime checks)
 VITE_FIREBASE_PROJECT_ID=YOUR_PROJECT_ID
 VITE_FIREBASE_APP_ID=YOUR_APP_ID
 VITE_FIREBASE_API_KEY=YOUR_API_KEY
@@ -69,6 +94,13 @@ VITE_FIREBASE_MESSAGING_SENDER_ID=YOUR_MESSAGING_SENDER_ID
 # Optional: Restrict team login to a specific domain (e.g., yourcompany.com)
 VITE_ALLOWED_DOMAIN=yourcompany.com
 
+# Required for role management, owner bootstrap, and Admin SDK writes
+FIREBASE_PROJECT_ID=YOUR_PROJECT_ID
+FIREBASE_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+
+# Optional owner bootstrap allow-list (comma-separated)
+OWNER_EMAILS=owner1@yourorg.com,owner2@yourorg.com
+
 # Optional: Comma-separated browser origins allowed to call server APIs
 # (recommended for production)
 CORS_ALLOWED_ORIGINS=https://your-app.vercel.app
@@ -76,11 +108,34 @@ CORS_ALLOWED_ORIGINS=https://your-app.vercel.app
 # Optional: Express trust proxy setting ("false", "true", or proxy hop count like "1")
 # Defaults to "1" in production and "false" in development.
 TRUST_PROXY=1
+
+# Optional distributed rate limiting (recommended in production)
+UPSTASH_REDIS_REST_URL=https://<upstash-endpoint>
+UPSTASH_REDIS_REST_TOKEN=<upstash-token>
+
+# Optional integrations for project links
+VITE_PROJECT_GITHUB_BASE_URL=https://github.com/your-org/your-repo/tree/main/projects
+VITE_PROJECT_DRIVE_FOLDER_BASE_URL=https://drive.google.com/drive/folders/<root-folder-id>
+
+# Optional AI providers (server-side only; do NOT prefix with VITE_)
+GEMINI_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GROQ_API_KEY=
+GROQ_BASE_URL=
+GEMMA_API_KEY=
+GEMMA_BASE_URL=
+GROC_API_KEY=
+GROC_BASE_URL=
+
+# Optional operations digest delivery webhooks
+SLACK_WEBHOOK_URL=
+OPS_DIGEST_EMAIL_WEBHOOK_URL=
 ```
 
 *(Note: Keep `.env` out of version control so API keys are never committed. This project includes `.env.example` as the template for required values.)*
 
-### 6. Install Dependencies & Run
+### 7. Install Dependencies & Run
 
 ```bash
 # Install dependencies
@@ -91,6 +146,58 @@ npm run dev
 ```
 
 The app will be available at `http://localhost:3000`.
+
+### Environment Variables Checklist for Vercel
+
+Use this checklist when configuring a production Vercel project:
+
+**Required**
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_DATABASE_ID`
+- `VITE_FIREBASE_STORAGE_BUCKET`
+- `VITE_FIREBASE_MESSAGING_SENDER_ID`
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_SERVICE_ACCOUNT_JSON`
+
+**Strongly recommended**
+- `CORS_ALLOWED_ORIGINS`
+- `TRUST_PROXY`
+- `OWNER_EMAILS`
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+
+**Optional (based on features you enable)**
+- `VITE_ALLOWED_DOMAIN`
+- `VITE_PROJECT_GITHUB_BASE_URL`
+- `VITE_PROJECT_DRIVE_FOLDER_BASE_URL`
+- `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GEMMA_API_KEY`, `GEMMA_BASE_URL`, `GROC_API_KEY`, `GROC_BASE_URL`
+- `SLACK_WEBHOOK_URL`, `OPS_DIGEST_EMAIL_WEBHOOK_URL`
+
+## Google Drive & Google Calendar Integration Setup
+
+This app does **link integration** (deep links), not direct Google API sync.  
+You configure link bases/IDs and the app generates project-specific links in record view.
+
+### A) Google Drive setup
+
+1. Create a shared Drive folder that will contain project subfolders.
+2. Copy the folder URL (`https://drive.google.com/drive/folders/<folder-id>`).
+3. Configure one of these:
+   - **Global default** for all deployments: set `VITE_PROJECT_DRIVE_FOLDER_BASE_URL` in env.
+   - **Runtime setting** in app: Settings → Integrations → **Google Drive base folder URL**.
+4. In each project record, the app builds links as:  
+   `<drive-base>/<project.code>` (normalized to Google Drive URL format).
+
+### B) Google Calendar setup
+
+1. In Google Calendar, open the team/shared calendar settings.
+2. Copy the **Calendar ID** (example: `team-calendar@group.calendar.google.com`).
+3. In app Settings → Integrations, set **Shared Google Calendar ID**.
+4. Ensure projects have a `dueDate`; the “Calendar” link appears only when both `dueDate` and `googleCalendarId` are set.
+5. The app opens a prefilled Google Calendar event creation URL with title + due date context for the project.
 
 ### Dependency Vulnerability Scan
 
@@ -174,7 +281,7 @@ import { getAuth } from 'firebase-admin/auth';
 await getAuth().setCustomUserClaims('<UID>', { admin: false });
 ```
 
-## Deploying to Vercel
+## Deploying to Vercel (Primary)
 
 Because this project includes an Express server (`server.ts`) for secure AI/provider key handling and admin APIs, deploy it as a **Node.js app** (not static-only hosting).
 
@@ -185,16 +292,7 @@ Because this project includes an Express server (`server.ts`) for secure AI/prov
    - **Build Command**: `npm run build`
    - **Install Command**: `npm install`
    - **Start Command**: `npm run start`
-5. **Environment Variables**: Add Firebase and optional AI keys in the Vercel Environment Variables section:
-   - `VITE_FIREBASE_PROJECT_ID`
-   - `VITE_FIREBASE_APP_ID`
-   - `VITE_FIREBASE_API_KEY`
-   - `VITE_FIREBASE_AUTH_DOMAIN`
-   - `VITE_FIREBASE_DATABASE_ID`
-   - `VITE_FIREBASE_STORAGE_BUCKET`
-   - `VITE_FIREBASE_MESSAGING_SENDER_ID`
-   - `VITE_ALLOWED_DOMAIN` (optional)
-   - Server-side AI/provider keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `GEMMA_API_KEY` / `GEMMA_BASE_URL`, etc.) if AI features are enabled
+5. **Environment Variables**: Add all required variables from **Environment Variables Checklist for Vercel** above.
 6. Click **Deploy**.
 
 **Important Post-Deployment Step:** Once Vercel provides your live production URL (for example `https://your-app.vercel.app`), add this domain to Firebase Authentication **Authorized domains** (Authentication → Settings → Authorized domains) so Google Sign-In works correctly.
@@ -321,10 +419,49 @@ The digest includes:
 Because the app now uses an Express backend to secure the API keys, you must deploy it as a Node.js server rather than a static site.
 1. In Vercel, set the **Build Command** to `npm run build`.
 2. Ensure Vercel is configured to run the `dist/server.cjs` file.
-3. Add the AI API keys and (optionally) `FIREBASE_WEB_API_KEY` as server-side environment variables.
+3. Add AI API keys as server-side environment variables (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.).
 4. `/api/ai/generate` now requires a Firebase ID token for an authenticated user with `admin: true` custom claim.
 5. Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` for **distributed** rate limiting across serverless instances. If they are missing in production, the server still starts but logs a warning and falls back to per-instance in-memory limits (less reliable under load).
 6. The API includes request-size limits and distributed rate limiting (including `/api/admin/settings` and `/api/admin/operations/run`), plus timeout guards on admin mutation/digest endpoints; tune these values in `server.ts` as needed.
+
+## Forked Deployment Option: Gemini Enterprise Agent Platform (formerly Vertex)
+
+If a partner team forks this repo and prefers Google Cloud-native deployment, deploy the same Node server to **Cloud Run** and manage secrets with **Secret Manager**.
+
+### 1) Fork + connect Google Cloud project
+1. Fork this repository to your org GitHub.
+2. Create/select a Google Cloud project.
+3. Enable APIs: Cloud Run, Artifact Registry, Secret Manager, IAM, Firestore, Identity Toolkit/Firebase Auth.
+
+### 2) Build and deploy
+Use Cloud Build or local Docker + `gcloud run deploy`. The runtime command must start `dist/server.cjs` (same as `npm run start`).
+
+Example high-level flow:
+1. `npm ci`
+2. `npm run build`
+3. Package/deploy to Cloud Run
+4. Set service env vars/secrets (same keys as Vercel checklist)
+
+### 3) Secrets + runtime config
+- Store sensitive values (`FIREBASE_SERVICE_ACCOUNT_JSON`, AI keys, webhook URLs) in Secret Manager.
+- Mount/inject them as env vars in the Cloud Run service.
+- Set `APP_URL` to the Cloud Run service URL (or your custom domain).
+- Set `CORS_ALLOWED_ORIGINS` to your frontend origin(s).
+
+### 4) Firebase/Auth post-deploy
+1. Add the Cloud Run/custom domain to Firebase Auth **Authorized domains**.
+2. Deploy Firestore rules and indexes:
+   ```bash
+   firebase deploy --only firestore:rules,firestore:indexes
+   ```
+3. Validate owner bootstrap (`OWNER_EMAILS`) and role reconciliation flows.
+
+### 5) Gemini Enterprise Agent Platform usage pattern
+Use this app as the operational front-end/API while your Gemini Enterprise agent workflows run in Google Cloud.  
+In practice, teams usually:
+- keep this app deployed on Cloud Run,
+- keep Firestore/Auth in the same GCP project,
+- and route AI/provider calls via server-managed keys per environment.
 
 ## Data Visibility & Access Model
 
