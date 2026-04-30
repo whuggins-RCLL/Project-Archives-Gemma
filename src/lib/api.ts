@@ -346,7 +346,7 @@ export const api = {
     provider: string,
     model: string,
     systemInstruction?: string,
-    feature?: 'autoTag' | 'summarize' | 'nextBestAction' | 'riskNarrative' | 'pmApproach',
+    feature?: 'autoTag' | 'summarize' | 'nextBestAction' | 'riskNarrative' | 'pmApproach' | 'publicNarrative',
   ): Promise<string> => {
     try {
       const currentUser = auth.currentUser;
