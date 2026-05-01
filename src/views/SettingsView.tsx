@@ -42,7 +42,6 @@ export default function SettingsView({
   const [saving, setSaving] = useState(false);
   const [bootstrapStatus, setBootstrapStatus] = useState<{ ownerCount: number; configured: boolean; eligible: boolean } | null>(null);
   const [claimingOwner, setClaimingOwner] = useState(false);
-  const [savingHeroContent, setSavingHeroContent] = useState(false);
 
   const readOnly = !canManageSettings;
 

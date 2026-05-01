@@ -46,11 +46,31 @@ export default function RecordView({ projects, loading: projectsLoading, project
     api.getSettings().then(setSettings);
     api.listClaimableMembers().then((members) => {
       setClaimableMembers(members);
-      if (members.length > 0) setSelectedClaimUid(members[0].uid);
     }).catch(() => {
       setClaimableMembers([]);
     });
   }, []);
+
+  useEffect(() => {
+    if (!project || claimableMembers.length === 0) return;
+    const ownerName = project.owner?.name?.trim().toLowerCase();
+    if (!ownerName) return;
+
+    const matchedMember = claimableMembers.find((member) => {
+      const displayName = member.displayName.trim().toLowerCase();
+      const email = member.email.trim().toLowerCase();
+      return displayName === ownerName || email === ownerName;
+    });
+
+    if (matchedMember) {
+      setSelectedClaimUid(matchedMember.uid);
+      return;
+    }
+
+    if (!selectedClaimUid) {
+      setSelectedClaimUid(claimableMembers[0].uid);
+    }
+  }, [project, claimableMembers, selectedClaimUid]);
 
   useEffect(() => {
     if (projectId && projects.length > 0) {
