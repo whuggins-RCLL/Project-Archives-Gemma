@@ -659,6 +659,9 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<PublicView />} />
+        <Route path="/skills" element={<PublicView />} />
+        <Route path="/tutorials" element={<PublicView />} />
+        <Route path="/ai-tools" element={<PublicView />} />
         <Route path="/faculty-publications-ai" element={<FacultyPublicationsView />} />
         <Route path="/login" element={<LoginView />} />
         <Route 
