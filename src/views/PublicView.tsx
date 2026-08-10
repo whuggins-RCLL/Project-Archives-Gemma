@@ -16,6 +16,7 @@ import ThemeToggle from '../components/ThemeToggle';
 import ArtifactLinkIcon from '../components/ArtifactLinkIcon';
 import { getValidArtifactLinks, normalizeArtifactUrl } from '../lib/artifactLinks';
 import { auth } from '../lib/firebase';
+import { FACULTY_PUBLICATIONS_PATH, isFacultyPublicationsLink } from './FacultyPublicationsView';
 
 const DESCRIPTION_PREVIEW_LIMIT = 160;
 const STATUS_GROUP_ORDER = ['In Progress', 'Planning', 'On Hold', 'Launched'] as const;
@@ -335,19 +336,31 @@ export default function PublicView() {
                   <Sparkles className="w-4 h-4 text-amber-300" aria-hidden />
                   Suggest a project
                 </a>
-                {heroQuickLinks.map((link) => (
-                  <a
+                {heroQuickLinks.map((link) => {
+                  const isPublicationsLink = isFacultyPublicationsLink(link.label, link.url);
+                  return isPublicationsLink ? (
+                  <Link
                     key={link.id}
-                    href={link.url}
-                    target="_blank"
-                    rel="noreferrer"
+                    to={FACULTY_PUBLICATIONS_PATH}
                     className="group inline-flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-semibold text-brand-dark shadow-lg shadow-black/25 ring-1 ring-white/40 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                   >
                     {link.label}
-                    <span className="sr-only"> (opens in new tab)</span>
                     <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
-                  </a>
-                ))}
+                  </Link>
+                  ) : (
+                    <a
+                      key={link.id}
+                      href={link.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="group inline-flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-semibold text-brand-dark shadow-lg shadow-black/25 ring-1 ring-white/40 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                    >
+                      {link.label}
+                      <span className="sr-only"> (opens in new tab)</span>
+                      <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+                    </a>
+                  );
+                })}
             </div>
             <div className="flex flex-wrap gap-4">
               <div className="glass-on-dark glass-sheen rounded-2xl p-4 flex items-center gap-4 shadow-lg">

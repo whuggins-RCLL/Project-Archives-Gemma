@@ -17,6 +17,7 @@ import PortfolioView from './views/PortfolioView';
 import RecordView from './views/RecordView';
 import MyProjectsView from './views/MyProjectsView';
 import PublicView from './views/PublicView';
+import FacultyPublicationsView from './views/FacultyPublicationsView';
 import LoginView from './views/LoginView';
 import SettingsView from './views/SettingsView';
 import AdminUsersView from './views/AdminUsersView';
@@ -658,6 +659,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<PublicView />} />
+        <Route path="/faculty-publications-ai" element={<FacultyPublicationsView />} />
         <Route path="/login" element={<LoginView />} />
         <Route 
           path="/app/*" 
