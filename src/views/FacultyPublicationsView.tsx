@@ -3,14 +3,7 @@ import { Link } from 'react-router-dom';
 import { APP_CONFIG } from '../config';
 import ThemeToggle from '../components/ThemeToggle';
 import { useBranding } from '../hooks/useBranding';
-
-export const FACULTY_PUBLICATIONS_PATH = '/faculty-publications-ai';
-export const FACULTY_PUBLICATIONS_URL = 'https://law.stanford.edu/publications/?related_organization=556083&page=1';
-
-export function isFacultyPublicationsLink(label: string, url: string): boolean {
-  return label.trim().toLowerCase() === 'sls faculty publications on ai'
-    || url.includes('law.stanford.edu/publications/?related_organization=556083');
-}
+import { FACULTY_PUBLICATIONS_URL } from '../lib/facultyPublications';
 
 export default function FacultyPublicationsView() {
   const { branding } = useBranding();

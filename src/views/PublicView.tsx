@@ -16,7 +16,7 @@ import ThemeToggle from '../components/ThemeToggle';
 import ArtifactLinkIcon from '../components/ArtifactLinkIcon';
 import { getValidArtifactLinks, normalizeArtifactUrl } from '../lib/artifactLinks';
 import { auth } from '../lib/firebase';
-import { FACULTY_PUBLICATIONS_PATH, isFacultyPublicationsLink } from './FacultyPublicationsView';
+import { FACULTY_PUBLICATIONS_PATH, isFacultyPublicationsLink } from '../lib/facultyPublications';
 
 const DESCRIPTION_PREVIEW_LIMIT = 160;
 const STATUS_GROUP_ORDER = ['In Progress', 'Planning', 'On Hold', 'Launched'] as const;
@@ -488,17 +488,28 @@ export default function PublicView() {
                   {artifactLinks.length > 0 && (
                     <div className="mb-6 flex flex-wrap gap-2">
                       {artifactLinks.map((link) => (
-                        <a
-                          key={link.id}
-                          href={normalizeArtifactUrl(link.url)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant/30 bg-surface-container-lowest/70 px-3 py-1 text-xs font-semibold text-brand-dark shadow-sm transition-all hover:border-primary/40 hover:text-primary hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                        >
-                          <ArtifactLinkIcon type={link.type} className="w-3.5 h-3.5" />
-                          {link.label}
-                          <span className="sr-only"> (opens in new tab)</span>
-                        </a>
+                        isFacultyPublicationsLink(link.label, normalizeArtifactUrl(link.url)) ? (
+                          <Link
+                            key={link.id}
+                            to={FACULTY_PUBLICATIONS_PATH}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant/30 bg-surface-container-lowest/70 px-3 py-1 text-xs font-semibold text-brand-dark shadow-sm transition-all hover:border-primary/40 hover:text-primary hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                          >
+                            <ArtifactLinkIcon type={link.type} className="w-3.5 h-3.5" />
+                            {link.label}
+                          </Link>
+                        ) : (
+                          <a
+                            key={link.id}
+                            href={normalizeArtifactUrl(link.url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant/30 bg-surface-container-lowest/70 px-3 py-1 text-xs font-semibold text-brand-dark shadow-sm transition-all hover:border-primary/40 hover:text-primary hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                          >
+                            <ArtifactLinkIcon type={link.type} className="w-3.5 h-3.5" />
+                            {link.label}
+                            <span className="sr-only"> (opens in new tab)</span>
+                          </a>
+                        )
                       ))}
                     </div>
                   )}
