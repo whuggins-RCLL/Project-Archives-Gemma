@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { Project } from '../types';
-import { FolderArchive, ArrowRight, BarChart3, Clock, ShieldCheck, ChevronDown, ChevronUp, Layers3, Heart, Sparkles, LogOut } from 'lucide-react';
+import { FolderArchive, ArrowRight, BarChart3, Clock, ShieldCheck, ChevronDown, ChevronUp, Layers3, Heart, Sparkles, LogOut, Home, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import { APP_CONFIG } from '../config';
@@ -196,6 +196,15 @@ export default function PublicView() {
   const teamLinkTarget = isTeamMember ? '/app' : '/login';
   const teamLinkLabel = isTeamMember ? 'Back to Dashboard' : 'Team Login';
 
+  const handleHeaderSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    document.getElementById('main-content')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const getNavigationLabel = (label: string) => (
+    label.trim().toLowerCase() === 'faculty' ? 'Faulty Support' : label
+  );
+
   const handleSignOut = async () => {
     try {
       await signOut(auth);
@@ -210,7 +219,7 @@ export default function PublicView() {
       {/* Header — hidden in embed layout, where the title and Team Login move into the hero */}
       {!isEmbedLayout && (
       <header className="glass-nav sticky top-0 z-30">
-        <div className="content-shell h-16 flex items-center justify-between">
+        <div className="content-shell flex min-h-16 items-center justify-between gap-5 py-3">
           <div className="flex items-center gap-3 min-w-0">
             {branding.logoUrl ? (
               <img
@@ -228,22 +237,41 @@ export default function PublicView() {
               <p className="text-xs text-on-surface-variant truncate">{branding.suiteName || APP_CONFIG.appName}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <ThemeToggle />
-            <Link
-              to={teamLinkTarget}
-              className="group inline-flex items-center gap-2 rounded-full border border-outline-variant/30 bg-surface-container-lowest/70 px-4 py-2 text-sm font-semibold text-brand-dark shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
-            >
-              {teamLinkLabel} <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
-            </Link>
-            {isTeamMember && (
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="group inline-flex items-center gap-2 rounded-full border border-outline-variant/30 bg-surface-container-lowest/70 px-4 py-2 text-sm font-semibold text-brand-dark shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
-              >
-                Sign out <LogOut className="w-4 h-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
-              </button>
+          <div className="flex min-w-0 flex-col items-end gap-2">
+            <div className="flex items-center justify-end gap-2 sm:gap-3">
+              <Link to="/" className="inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-brand-dark transition-colors hover:bg-surface-container-high" aria-label="Home">
+                <Home className="h-4 w-4" aria-hidden />
+                <span className="hidden sm:inline">Home</span>
+              </Link>
+              <form role="search" onSubmit={handleHeaderSearch} className="relative">
+                <label htmlFor="header-project-search" className="sr-only">Search projects</label>
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-on-surface-variant" aria-hidden />
+                <input
+                  id="header-project-search"
+                  type="search"
+                  value={filterQuery.searchTerm}
+                  onChange={(event) => setFilterQuery((query) => ({ ...query, searchTerm: event.target.value }))}
+                  placeholder="Search projects"
+                  className="h-9 w-36 rounded-full border border-outline-variant/30 bg-surface-container-lowest/70 pl-9 pr-3 text-sm text-brand-dark outline-none transition-all placeholder:text-on-surface-variant focus:w-48 focus:border-primary/50 focus:ring-2 focus:ring-primary/15 sm:w-48 sm:focus:w-56"
+                />
+              </form>
+              <ThemeToggle />
+              <Link to={teamLinkTarget} className="group hidden items-center gap-2 rounded-full border border-outline-variant/30 bg-surface-container-lowest/70 px-4 py-2 text-sm font-semibold text-brand-dark shadow-sm transition-all hover:border-primary/40 hover:shadow-md md:inline-flex">
+                {teamLinkLabel} <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+              </Link>
+              {isTeamMember && <button type="button" onClick={handleSignOut} aria-label="Sign out" className="hidden rounded-full p-2 text-on-surface-variant hover:bg-error/10 hover:text-error lg:inline-flex"><LogOut className="h-4 w-4" aria-hidden /></button>}
+            </div>
+            {heroQuickLinks.length > 0 && (
+              <nav aria-label="Quick links" className="hidden max-w-full items-center justify-end gap-x-5 gap-y-1 md:flex md:flex-wrap">
+                {heroQuickLinks.map((link) => {
+                  const label = getNavigationLabel(link.label);
+                  return isFacultyPublicationsLink(link.label, link.url) ? (
+                    <Link key={link.id} to={FACULTY_PUBLICATIONS_PATH} className="text-xs font-semibold text-on-surface-variant transition-colors hover:text-primary">{label}</Link>
+                  ) : (
+                    <a key={link.id} href={link.url} target="_blank" rel="noreferrer" className="text-xs font-semibold text-on-surface-variant transition-colors hover:text-primary">{label}<span className="sr-only"> (opens in new tab)</span></a>
+                  );
+                })}
+              </nav>
             )}
           </div>
         </div>
@@ -336,31 +364,6 @@ export default function PublicView() {
                   <Sparkles className="w-4 h-4 text-amber-300" aria-hidden />
                   Suggest a project
                 </a>
-                {heroQuickLinks.map((link) => {
-                  const isPublicationsLink = isFacultyPublicationsLink(link.label, link.url);
-                  return isPublicationsLink ? (
-                  <Link
-                    key={link.id}
-                    to={FACULTY_PUBLICATIONS_PATH}
-                    className="group inline-flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-semibold text-brand-dark shadow-lg shadow-black/25 ring-1 ring-white/40 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                  >
-                    {link.label}
-                    <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
-                  </Link>
-                  ) : (
-                    <a
-                      key={link.id}
-                      href={link.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="group inline-flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-semibold text-brand-dark shadow-lg shadow-black/25 ring-1 ring-white/40 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                    >
-                      {link.label}
-                      <span className="sr-only"> (opens in new tab)</span>
-                      <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
-                    </a>
-                  );
-                })}
             </div>
             <div className="flex flex-wrap gap-4">
               <div className="glass-on-dark glass-sheen rounded-2xl p-4 flex items-center gap-4 shadow-lg">
