@@ -18,6 +18,12 @@ import { getValidArtifactLinks, normalizeArtifactUrl } from '../lib/artifactLink
 import { auth } from '../lib/firebase';
 import { FACULTY_PUBLICATIONS_PATH, isFacultyPublicationsLink } from '../lib/facultyPublications';
 
+const HERO_ACTIONS = [
+  { label: 'Use Skills to Learn AI', to: '/skills' },
+  { label: 'Tutorials', to: '/tutorials' },
+  { label: 'AI Tools', to: '/ai-tools' },
+] as const;
+
 const DESCRIPTION_PREVIEW_LIMIT = 160;
 const STATUS_GROUP_ORDER = ['In Progress', 'Planning', 'On Hold', 'Launched'] as const;
 
@@ -182,11 +188,6 @@ export default function PublicView() {
       }));
   }, [visibleProjects]);
   const filterOptions = useMemo(() => getFilterOptions(publicProjects), [publicProjects]);
-  const heroQuickLinks = useMemo(
-    () => (settings.heroQuickLinks ?? []).filter((link) => link.label.trim() && link.url.trim()),
-    [settings.heroQuickLinks],
-  );
-  const publishedNarrative = (settings.heroNarrativePublished ?? '').trim();
   const isEmbedLayout = settings.publicLayout === 'embed';
   const showEmbedLogo = settings.embedShowLogo ?? true;
   // Signed-in team members go straight back to the dashboard instead of
@@ -200,10 +201,6 @@ export default function PublicView() {
     event.preventDefault();
     document.getElementById('main-content')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
-
-  const getNavigationLabel = (label: string) => (
-    label.trim().toLowerCase() === 'faculty' ? 'Faulty Support' : label
-  );
 
   const handleSignOut = async () => {
     try {
@@ -261,18 +258,6 @@ export default function PublicView() {
               </Link>
               {isTeamMember && <button type="button" onClick={handleSignOut} aria-label="Sign out" className="hidden rounded-full p-2 text-on-surface-variant hover:bg-error/10 hover:text-error lg:inline-flex"><LogOut className="h-4 w-4" aria-hidden /></button>}
             </div>
-            {heroQuickLinks.length > 0 && (
-              <nav aria-label="Quick links" className="hidden max-w-full items-center justify-end gap-x-5 gap-y-1 md:flex md:flex-wrap">
-                {heroQuickLinks.map((link) => {
-                  const label = getNavigationLabel(link.label);
-                  return isFacultyPublicationsLink(link.label, link.url) ? (
-                    <Link key={link.id} to={FACULTY_PUBLICATIONS_PATH} className="text-xs font-semibold text-on-surface-variant transition-colors hover:text-primary">{label}</Link>
-                  ) : (
-                    <a key={link.id} href={link.url} target="_blank" rel="noreferrer" className="text-xs font-semibold text-on-surface-variant transition-colors hover:text-primary">{label}<span className="sr-only"> (opens in new tab)</span></a>
-                  );
-                })}
-              </nav>
-            )}
           </div>
         </div>
       </header>
@@ -348,22 +333,17 @@ export default function PublicView() {
             <h2 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold font-headline tracking-tight mb-6 leading-[1.05]">
               {APP_CONFIG.heroTitle}
             </h2>
-            <p className="text-lg sm:text-xl text-white/80 mb-8 max-w-2xl leading-relaxed">
-              {APP_CONFIG.heroSubtitle}
-            </p>
-            {publishedNarrative && (
-              <div className="glass-on-dark glass-sheen mb-8 rounded-2xl p-5 leading-relaxed text-white/90 shadow-xl">
-                <p className="text-base sm:text-lg whitespace-pre-line">{publishedNarrative}</p>
-              </div>
-            )}
             <div className="mb-8 flex flex-wrap gap-3">
-                <a
-                  href="#suggest-a-project"
+              {HERO_ACTIONS.map((action) => (
+                <Link
+                  key={action.to}
+                  to={action.to}
                   className="group inline-flex items-center gap-2 rounded-full glass-on-dark px-6 py-2.5 text-sm font-semibold text-white shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
                 >
-                  <Sparkles className="w-4 h-4 text-amber-300" aria-hidden />
-                  Suggest a project
-                </a>
+                  {action.label}
+                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+                </Link>
+              ))}
             </div>
             <div className="flex flex-wrap gap-4">
               <div className="glass-on-dark glass-sheen rounded-2xl p-4 flex items-center gap-4 shadow-lg">
@@ -622,11 +602,6 @@ export default function PublicView() {
               ? settings.customFooter
               : <>&copy; {new Date().getFullYear()} {APP_CONFIG.footerText}</>}
           </p>
-          {settings.helpContactEmail && (
-            <p className="text-xs text-on-surface-variant/70 mt-2">
-              Need help? Contact <a href={`mailto:${settings.helpContactEmail}`} className="underline hover:text-primary">{settings.helpContactEmail}</a>
-            </p>
-          )}
         </div>
       </footer>
       )}
